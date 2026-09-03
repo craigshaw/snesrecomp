@@ -1377,6 +1377,8 @@ def emit_function(rom: bytes, bank: int, start: int,
         pairs = block_per_insn_ir.get(key, [])
         skip_emit_idx = set()
         for ji, (jdi, _jops) in enumerate(pairs):
+            if getattr(jdi, 'call_trampoline_setup', False):
+                skip_emit_idx.add(ji)
             if (jdi.mnem == 'JMP' and jdi.length == 4
                     and getattr(jdi, 'dispatch_entries', None)):
                 k2 = ji - 1
@@ -1498,7 +1500,7 @@ def emit_function(rom: bytes, bank: int, start: int,
                 else:
                     lines.append(
                         f"/* trampoline setup {di_insn.mnem} skipped — "
-                        f"inlined into synthesized dispatch below */"
+                        f"folded into synthesized call/dispatch below */"
                     )
                 continue
             # Axis-2 step C dynamics: charge runtime-only modifiers (D.l != 0,
@@ -1541,6 +1543,18 @@ def emit_function(rom: bytes, bank: int, start: int,
                         for ln in _emit_dispatch(insn):
                             lines.append(ln)
                         block_terminated = True
+                    elif getattr(insn, 'return_trampoline', False):
+                        call = Call(
+                            target=insn.operand & 0xFFFFFF,
+                            long=True,
+                            entry_m=insn.m_flag & 1,
+                            entry_x=insn.x_flag & 1,
+                            source_pc24=insn.addr & 0xFFFFFF,
+                        )
+                        lines.append(
+                            "/* PHK;PER;JML return trampoline -> long call */")
+                        for ln in emit_op(call, getattr(insn, 'addr', None)):
+                            lines.append(ln)
                     else:
                         succs = block.successors
                         blk_pc24 = (bank << 16) | (key.pc & 0xFFFF)
@@ -1916,7 +1930,21 @@ def emit_function(rom: bytes, bank: int, start: int,
                                 lines.append(ln)
                             block_terminated = True
                     else:
-                        for ln in emit_op(op, getattr(di_insn, 'addr', None)):
+                        emitted_op = op
+                        veneer_target = getattr(
+                            insn, 'long_call_trampoline_target', None)
+                        if veneer_target is not None:
+                            emitted_op = Call(
+                                target=int(veneer_target) & 0xFFFFFF,
+                                long=True,
+                                entry_m=insn.m_flag & 1,
+                                entry_x=insn.x_flag & 1,
+                                source_pc24=insn.addr & 0xFFFFFF,
+                            )
+                            lines.append(
+                                "/* PHK;JSR long-call veneer -> long call */")
+                        for ln in emit_op(emitted_op,
+                                          getattr(di_insn, 'addr', None)):
                             lines.append(ln)
                         if op.terminal:
                             block_terminated = True
@@ -1962,7 +1990,9 @@ def emit_function(rom: bytes, bank: int, start: int,
                 lines.append(_goto_or_return(succs[0], source_pc24=blk_pc24)
                              + " /* implicit fall-through */")
             elif (len(succs) > 1 and pairs
-                  and pairs[-1][0].mnem in ('JSR', 'JSL')):
+                  and (pairs[-1][0].mnem in ('JSR', 'JSL')
+                       or getattr(pairs[-1][0],
+                                  'return_trampoline', False))):
                 lines.append("switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1)) {")
                 seen_mx = set()
                 fallback_stmt = None

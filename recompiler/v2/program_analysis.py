@@ -319,7 +319,18 @@ def summarize_decode_graph(
         if entries:
             continue
 
-        if insn.mnem == "JSL":
+        long_veneer_target = getattr(
+            insn, "long_call_trampoline_target", None)
+        if long_veneer_target is not None:
+            target = VariantKey(
+                int(long_veneer_target), insn.m_flag, insn.x_flag)
+            resolution = (EdgeResolution.AOT_EXACT
+                          if target_is_code is None or target_is_code(target)
+                          else EdgeResolution.LLE_EXACT)
+            edges.add(DemandEdge(
+                site, EdgeKind.DIRECT_CALL, resolution, target,
+                detail="phk_jsr_jml_veneer"))
+        elif insn.mnem == "JSL":
             target = VariantKey(insn.operand, insn.m_flag, insn.x_flag)
             resolution = (EdgeResolution.AOT_EXACT
                           if target_is_code is None or target_is_code(target)
@@ -335,6 +346,15 @@ def summarize_decode_graph(
                           else EdgeResolution.LLE_EXACT)
             edges.add(DemandEdge(
                 site, EdgeKind.DIRECT_CALL, resolution, target))
+        elif (insn.mnem == "JMP" and insn.length == 4
+              and getattr(insn, "return_trampoline", False)):
+            target = VariantKey(insn.operand, insn.m_flag, insn.x_flag)
+            resolution = (EdgeResolution.AOT_EXACT
+                          if target_is_code is None or target_is_code(target)
+                          else EdgeResolution.LLE_EXACT)
+            edges.add(DemandEdge(
+                site, EdgeKind.DIRECT_CALL, resolution, target,
+                detail="phk_per_jml_return"))
         elif insn.mnem == "JMP" and insn.length == 4:
             target = VariantKey(insn.operand, insn.m_flag, insn.x_flag)
             resolution = (EdgeResolution.AOT_EXACT

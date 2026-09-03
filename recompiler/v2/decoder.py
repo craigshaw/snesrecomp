@@ -1020,7 +1020,11 @@ def _labeled_successors(insn: Insn, key: DecodeKey, bank: int,
             (DecodeKey(addr24(bank, insn.operand), post_m, post_x, post_p_stack), 'jump'),
         ]
 
-    if mnem == 'JMP':
+    is_return_trampoline = bool(
+        mnem == 'JMP' and insn.mode == LONG
+        and getattr(insn, 'return_trampoline', False))
+
+    if mnem == 'JMP' and not is_return_trampoline:
         if insn.mode == ABS:
             return [(DecodeKey(addr24(bank, insn.operand), post_m, post_x, post_p_stack), 'jump')]
         # INDIR / INDIR_X (table-dispatch) and LONG (cross-bank) — no
@@ -1045,7 +1049,7 @@ def _labeled_successors(insn: Insn, key: DecodeKey, bank: int,
     # p_stack is preserved across JSR/JSL: the callee's own PHP/PLP is
     # internal to its body. A well-balanced callee leaves the caller's
     # PHP/PLP stack untouched.
-    if mnem in ('JSR', 'JSL'):
+    if mnem in ('JSR', 'JSL') or is_return_trampoline:
         # Source-authoritative inline-return-address ABI.  This direct JSR's
         # callee consumes the frame as table data and never resumes lexical
         # fall-through, so it is terminal regardless of whether the callee has
@@ -1056,9 +1060,15 @@ def _labeled_successors(insn: Insn, key: DecodeKey, bank: int,
         ret_m, ret_x = post_m, post_x
         target_pc24: Optional[int] = None
         if mnem == 'JSR' and insn.length == 3 and insn.mode != INDIR_X:
-            target_pc24 = addr24(bank, insn.operand & 0xFFFF)
+            target_pc24 = getattr(
+                insn, 'long_call_trampoline_target', None)
+            if target_pc24 is None:
+                target_pc24 = addr24(bank, insn.operand & 0xFFFF)
         elif mnem == 'JSL':
             target_pc24 = insn.operand & 0xFFFFFF
+        elif is_return_trampoline:
+            target_pc24 = insn.operand & 0xFFFFFF
+            next_pc = int(insn.return_trampoline_pc) & 0xFFFF
         # JSR/JSL to an INLINE-ARGUMENT routine: the callee reads its own
         # return address off the stack, consumes the N bytes that follow
         # the call as a parameter, and advances the stacked return address
@@ -1170,6 +1180,83 @@ def _pea_ptrcall_return_pc(rom: Optional[bytes], bank: int, pc: int,
         return fallback_next & 0xFFFF
     pea_operand = rom[off + 1] | (rom[off + 2] << 8)
     return (pea_operand + 1) & 0xFFFF
+
+
+def _rom_byte(rom: bytes, bank: int, pc: int) -> Optional[int]:
+    """Read one mapped program byte, returning None outside the ROM."""
+    try:
+        off = lorom_offset(bank, pc & 0xFFFF)
+    except AssertionError:
+        return None
+    return rom[off] if off < len(rom) else None
+
+
+def _mark_call_trampoline_setup(graph: 'FunctionDecodeGraph',
+                                bank: int, *pcs: int) -> bool:
+    """Mark already-decoded setup instructions as host-call bookkeeping.
+
+    Requiring every setup PC to already be in this graph prevents a function
+    whose entry happens to be a JML/JSR from borrowing unrelated bytes that
+    precede it in ROM and being misclassified as a trampoline.
+    """
+    marked = []
+    for pc in pcs:
+        matches = [di.insn for key, di in graph.insns.items()
+                   if key.pc == addr24(bank, pc & 0xFFFF)]
+        if not matches:
+            return False
+        marked.extend(matches)
+    for setup in marked:
+        setup.call_trampoline_setup = True
+    return True
+
+
+def _return_trampoline_pc(rom: bytes, bank: int, jml_pc: int) -> Optional[int]:
+    """Recognize ``PHK; PER return-1; JML target`` and return its resume PC."""
+    phk_pc = (jml_pc - 4) & 0xFFFF
+    per_pc = (jml_pc - 3) & 0xFFFF
+    if _rom_byte(rom, bank, phk_pc) != 0x4B:
+        return None
+    if _rom_byte(rom, bank, per_pc) != 0x62:
+        return None
+    lo = _rom_byte(rom, bank, per_pc + 1)
+    hi = _rom_byte(rom, bank, per_pc + 2)
+    if lo is None or hi is None:
+        return None
+    rel = lo | (hi << 8)
+    if rel & 0x8000:
+        rel -= 0x10000
+    return ((per_pc + 3 + rel) + 1) & 0xFFFF
+
+
+def _long_jsr_trampoline_target(rom: bytes, bank: int,
+                                jsr_target: int) -> Optional[int]:
+    """Recognize local veneers entered as ``PHK; JSR``.
+
+    A bare JML veneer lets the long target RTL directly.  A PEA/JML veneer
+    gives an RTS target a short return into a shared RTL instruction; in that
+    case the veneer itself remains the callee, but it must receive the outer
+    three-byte frame synthesized for the preceding PHK.
+    """
+    first = _rom_byte(rom, bank, jsr_target)
+    if first == 0x5C:
+        b0 = _rom_byte(rom, bank, jsr_target + 1)
+        b1 = _rom_byte(rom, bank, jsr_target + 2)
+        b2 = _rom_byte(rom, bank, jsr_target + 3)
+        if b0 is None or b1 is None or b2 is None:
+            return None
+        return b0 | (b1 << 8) | (b2 << 16)
+    if first != 0xF4 or _rom_byte(rom, bank, jsr_target + 3) != 0x5C:
+        return None
+    ret_lo = _rom_byte(rom, bank, jsr_target + 1)
+    ret_hi = _rom_byte(rom, bank, jsr_target + 2)
+    tgt_bank = _rom_byte(rom, bank, jsr_target + 6)
+    if ret_lo is None or ret_hi is None or tgt_bank is None:
+        return None
+    return_minus_one = ret_lo | (ret_hi << 8)
+    if _rom_byte(rom, tgt_bank, return_minus_one + 1) != 0x6B:
+        return None
+    return addr24(bank, jsr_target)
 
 
 def _detect_inline_arg_bytes_stack_slot(rom: bytes, bank: int, addr: int,
@@ -1958,6 +2045,27 @@ def _decode_function_uncached(rom: bytes, bank: int, start: int,
         insn.x_flag = key.x
         insn.data_region_exec = (
             (key.pc & 0xFFFFFF) in graph.data_region_exec_pcs)
+
+        # Two canonical source-level spellings of a cross-bank call use
+        # explicit stack setup instead of JSL.  Preserve their call/return
+        # semantics rather than treating the JML as a tail transfer.
+        if (insn.mnem == 'JMP' and insn.mode == LONG
+                and pred_pc == ((pc - 3) & 0xFFFF)):
+            return_pc = _return_trampoline_pc(rom, bank, pc)
+            if (return_pc is not None
+                    and _mark_call_trampoline_setup(
+                        graph, bank, pc - 4, pc - 3)):
+                insn.return_trampoline = True
+                insn.return_trampoline_pc = return_pc
+        elif (insn.mnem == 'JSR' and insn.mode != INDIR_X
+              and insn.length == 3
+              and pred_pc == ((pc - 1) & 0xFFFF)
+              and _rom_byte(rom, bank, pc - 1) == 0x4B):
+            target = _long_jsr_trampoline_target(
+                rom, bank, insn.operand & 0xFFFF)
+            if (target is not None
+                    and _mark_call_trampoline_setup(graph, bank, pc - 1)):
+                insn.long_call_trampoline_target = target
         if (terminal_jsr_sites
                 and (insn.addr & 0xFFFFFF) in terminal_jsr_sites):
             if not (insn.mnem == 'JSR' and insn.mode != INDIR_X
@@ -2778,7 +2886,8 @@ def _direct_tail_exit_keys(graph: 'FunctionDecodeGraph',
     if outside:
         return outside
     if (ins.mnem == 'JMP' and ins.length == 4
-            and not getattr(ins, 'dispatch_entries', None)):
+            and not getattr(ins, 'dispatch_entries', None)
+            and not getattr(ins, 'return_trampoline', False)):
         return [(ins.operand & 0xFFFFFF,
                  ins.m_flag & 1, ins.x_flag & 1)]
     return []
@@ -2835,6 +2944,8 @@ def _return_stack_delta_states(
 
     def local_delta(ins) -> Optional[int]:
         mnem = ins.mnem
+        if getattr(ins, 'call_trampoline_setup', False):
+            return 0
         consumed = int(getattr(ins, 'dispatch_consumed_stack_bytes', 0) or 0)
         if consumed:
             return -consumed
