@@ -1576,7 +1576,8 @@ def detect_inline_arg_bytes(rom: bytes, bank: int, addr: int,
     return detect_dp_return_inline_arg_bytes(rom, bank, addr)
 
 
-def classify_dispatch_helper(rom: bytes, bank: int, addr: int):
+def classify_dispatch_helper(rom: bytes, bank: int, addr: int,
+                             entry_m: int = 1, entry_x: int = 1):
     """Identify whether the subroutine at (bank, addr) is a JSL-jump-table
     dispatch helper. Returns 'short' (16-bit table entries), 'long'
     (24-bit table entries), or None.
@@ -1596,7 +1597,7 @@ def classify_dispatch_helper(rom: bytes, bank: int, addr: int):
                             INDIR_L)
     insns = []
     pc = addr & 0xFFFF
-    m, x = 1, 1
+    m, x = entry_m & 1, entry_x & 1
     safety = 0
     while safety < 256:
         safety += 1

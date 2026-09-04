@@ -1305,7 +1305,7 @@ def main() -> int:
     _phase("dispatch_helper_discovery")
     print("Auto-detecting JSL dispatch helpers...")
     dispatch_helpers: dict = {}
-    jsl_targets: set = set()
+    jsl_target_states: dict = {}
     call_targets: set = set()   # every JSR/JSL target (for inline-arg scan)
     for bank, _cfg_path, cfg in parsed:
         for entry in cfg.entries:
@@ -1320,22 +1320,30 @@ def main() -> int:
                 ins = di.insn
                 # JSL or JML (JMP LONG)
                 if ins.mnem == 'JSL':
-                    jsl_targets.add(ins.operand & 0xFFFFFF)
-                    call_targets.add(ins.operand & 0xFFFFFF)
+                    target = ins.operand & 0xFFFFFF
+                    jsl_target_states.setdefault(target, set()).add(
+                        (ins.m_flag & 1, ins.x_flag & 1))
+                    call_targets.add(target)
                 elif ins.mnem == 'JMP' and ins.length == 4:
-                    jsl_targets.add(ins.operand & 0xFFFFFF)
+                    target = ins.operand & 0xFFFFFF
+                    jsl_target_states.setdefault(target, set()).add(
+                        (ins.m_flag & 1, ins.x_flag & 1))
                 elif ins.mnem == 'JSR' and ins.length == 3:
                     call_targets.add((bank << 16) | (ins.operand & 0xFFFF))
     classified = {'short': 0, 'long': 0}
-    for tgt in jsl_targets:
+    for tgt, entry_states in jsl_target_states.items():
         tbank = (tgt >> 16) & 0xFF
         taddr = tgt & 0xFFFF
-        kind = classify_dispatch_helper(rom, tbank, taddr)
-        if kind:
+        kinds = {
+            classify_dispatch_helper(rom, tbank, taddr, entry_m, entry_x)
+            for entry_m, entry_x in entry_states
+        }
+        kind = next(iter(kinds)) if len(kinds) == 1 else None
+        if kind is not None:
             dispatch_helpers[tgt] = kind
             classified[kind] += 1
     print(f"  detected {classified['short']} short + {classified['long']} long dispatch helpers "
-          f"(scanned {len(jsl_targets)} JSL/JML targets)")
+          f"(scanned {len(jsl_target_states)} JSL/JML targets)")
 
     # Auto-detect JSR/JSL INLINE-ARGUMENT routines (no cfg hint — the
     # byte count is a property of the callee's own code; see
