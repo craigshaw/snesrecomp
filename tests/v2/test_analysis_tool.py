@@ -66,6 +66,46 @@ def test_probe_requirement_does_not_become_caller_exit():
     assert solved[helper] == frozenset({(0, 0)})
 
 
+def test_dispatch_helper_retraction_removes_stale_exit_fact():
+    rom = bytearray(make_lorom_bank0({
+        0x8000: bytes([
+            0x22, 0x00, 0x81, 0x00,  # JSL $00:8100
+            0x6C, 0x80, 0x00,        # JMP ($0080)
+        ]),
+        0x8050: bytes([
+            0x22, 0x00, 0x81, 0x00,  # Same helper, called with X=0.
+            0x60,
+        ]),
+        0x806C: bytes([0x60]),        # False short-table target.
+        # Helper-shaped only when decoded with X=1. With X=0 the LDX
+        # immediate consumes the following PLA byte and refutes the helper.
+        0x8100: bytes([
+            0xA2, 0x00, 0x68,        # LDX #$00 / high byte when X=0
+            0x0A, 0xAA,              # ASL A / TAX
+            0x6C, 0x20, 0x00,        # JMP ($0020)
+        ]),
+    }))
+    with tempfile.TemporaryDirectory() as directory:
+        cfg_dir = pathlib.Path(directory)
+        (cfg_dir / "bank00.cfg").write_text(
+            "bank = 00\n"
+            "func FirstCaller 8000 end:8007 entry_mx:1,1\n"
+            "func WidthRefuter 8050 end:8055 entry_mx:1,0\n"
+            "exit_mx_at 008100 1 1\n"
+            "exit_mx_at 00806C 1 1\n",
+            encoding="utf-8")
+        manifest, helpers, _inline = build_manifest(
+            bytes(rom), _load_cfgs(cfg_dir), max_insns=128, max_nodes=128,
+            all_cfg_roots=True)
+
+    caller = VariantKey(0x008000, 1, 1)
+    assert 0x008100 not in helpers
+    assert "has_lle_indirect_edge" in manifest.nodes[caller].reasons
+    assert caller not in manifest.exit_modes
+    assert caller not in manifest.exit_mode_sets
+    assert manifest.nodes[caller].disposition == NodeDisposition.AOT_ELIGIBLE
+
+
 def test_manifest_from_cfg_roots_is_stable_and_follows_calls():
     rom = make_lorom_bank0({
         0x8000: bytes([0x20, 0x00, 0x90, 0x60]),

@@ -938,15 +938,22 @@ def build_manifest(rom: bytes, parsed, *, max_insns: int, max_nodes: int,
                     unstable_exit_mode_sets.add(fact_key)
                     next_exit_mode_sets.pop(fact_key, None)
 
-            # If a later round exposes an unresolved call in a variant, an
-            # inferred exit fact retained from an earlier shorter graph is no
-            # longer proven. Retract it and let callers stop at the boundary.
+            # If a later round exposes any unresolved exit path in a variant,
+            # an inferred exit fact retained from an earlier graph is no longer
+            # proven. This includes dynamic jumps that appear after a dispatch
+            # helper classification is retracted at another observed M/X width.
             # Declared cfg/HLE ABI facts are independent of ROM decode and stay.
+            exit_fact_blockers = {
+                "unproven_callee_exit",
+                "has_lle_indirect_edge",
+                "has_lle_suppressed_call_edge",
+                "unstable_exit_fact",
+            }
             for node_key, node in manifest.nodes.items():
                 fact_key = (node_key.pc24, node_key.m, node_key.x)
                 if (fact_key not in declared_exit_modes
                         and fact_key not in recursive_solution_keys
-                        and "unproven_callee_exit" in node.reasons):
+                        and exit_fact_blockers.intersection(node.reasons)):
                     next_exit_modes.pop(fact_key, None)
                     next_exit_mode_sets.pop(fact_key, None)
             facts_stable = (
