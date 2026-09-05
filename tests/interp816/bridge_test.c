@@ -306,6 +306,15 @@ static int g_fail = 0, g_check = 0;
     g_fail++; printf("    FAIL: "); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 static CpuState g_c;
+static int g_post_rti_count;
+static uint32_t g_post_rti_pc;
+
+static void post_rti_probe(CpuState *cpu, uint32_t pc24) {
+    (void)cpu;
+    g_post_rti_count++;
+    g_post_rti_pc = pc24;
+}
+
 static void init_cpu(void) {
     memset(&g_c, 0, sizeof g_c);
     g_c.S = 0x01FF; g_c.emulation = 1; g_c.m_flag = 1; g_c.x_flag = 1;
@@ -788,6 +797,28 @@ int main(void) {
       CHECK(r == RECOMP_RETURN_SKIP_1, "r=%d exp SKIP_1", (int)r);
       CHECK(g_c.S == 0x01FF,
             "S=%04X exp 01FF (inner JSR and outer JSL consumed)", g_c.S); }
+
+    /* S14: an event-driven host must be able to observe the exact restored
+     * continuation without forcing an interrupt handler to run atomically. */
+    { memset(RAM, 0, MEMSZ); init_cpu();
+      g_c.emulation = 0;
+      cpu_mirrors_to_p(&g_c);
+      uint8_t handler[] = {0x40};             /* RTI */
+      load(0x8000, handler, sizeof handler);
+      RAM[0x8234] = 0xCB;                     /* WAI after resumed RTI */
+      cpu_push_interrupt_frame_at(&g_c, 0x008234);
+      g_post_rti_count = 0;
+      g_post_rti_pc = 0;
+      interp_bridge_set_post_rti_hook(post_rti_probe);
+      int rc = interp_bridge_run_until_quiescent(&g_c, 0x008000);
+      interp_bridge_set_post_rti_hook(NULL);
+      printf("S14 post-RTI hook reports restored continuation\n");
+      CHECK(rc == 1, "rc=%d exp 1", rc);
+      CHECK(g_post_rti_count == 1, "hook count=%d exp 1", g_post_rti_count);
+      CHECK(g_post_rti_pc == 0x008234,
+            "hook pc=$%06X exp $008234", (unsigned)g_post_rti_pc);
+      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (interrupt frame popped)",
+            g_c.S); }
 
     printf("\n==== interp_bridge Phase-1: %d/%d checks passed ====\n", g_check - g_fail, g_check);
     if (g_fail) { printf("RESULT: FAIL (%d)\n", g_fail); return 1; }

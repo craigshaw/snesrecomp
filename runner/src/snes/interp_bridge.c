@@ -288,6 +288,7 @@ static struct {
 static int s_pre_opcode_hook_count;
 static int s_pre_opcode_redirect_valid;
 static uint32_t s_pre_opcode_redirect_pc24;
+static InterpPostRtiHook s_post_rti_hook;
 
 void interp_bridge_set_pre_opcode_hook(uint32_t pc24,
                                        InterpPreOpcodeHook hook) {
@@ -321,6 +322,10 @@ void interp_bridge_set_pre_opcode_hook(uint32_t pc24,
 void interp_bridge_pre_opcode_redirect(uint32_t pc24) {
     s_pre_opcode_redirect_pc24 = pc24 & 0xFFFFFFu;
     s_pre_opcode_redirect_valid = 1;
+}
+
+void interp_bridge_set_post_rti_hook(InterpPostRtiHook hook) {
+    s_post_rti_hook = hook;
 }
 
 /* BRK bridge seam. The bounce is via explicit JSR/JSL interception below, not
@@ -1284,6 +1289,13 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 bridge_apu_flush(cpu);
                 return 1;
             }
+        }
+
+        if (op == 0x40 && s_post_rti_hook) {
+            const uint32_t return_pc = ((uint32_t)in.k << 16) | in.pc;
+            sync_interp_to_cpu(&in, cpu);
+            s_post_rti_hook(cpu, return_pc);
+            sync_cpu_to_interp(cpu, &in);
         }
 
         /* A host-invoked architectural interrupt handler is paired with the

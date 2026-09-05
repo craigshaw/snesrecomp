@@ -52,6 +52,13 @@ typedef void (*InterpPreOpcodeHook)(CpuState *cpu, uint32_t pc24);
 void interp_bridge_set_pre_opcode_hook(uint32_t pc24,
                                        InterpPreOpcodeHook hook);
 void interp_bridge_pre_opcode_redirect(uint32_t pc24);
+
+/* Optional notification after an interpreted RTI has restored the interrupted
+ * CPU state. The callback receives the exact resumed guest PC. Event-driven
+ * hosts use this to close interrupt-boundary captures without forcing the
+ * handler to execute atomically. */
+typedef void (*InterpPostRtiHook)(CpuState *cpu, uint32_t pc24);
+void interp_bridge_set_post_rti_hook(InterpPostRtiHook hook);
 /* Dump the last n entries of the always-on global interp step ring
  * (pc/op/sp/frame per interpreted opcode) to `out` (NULL = stderr). */
 #include <stdio.h>
