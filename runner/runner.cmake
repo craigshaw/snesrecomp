@@ -125,6 +125,7 @@ set(SNESRECOMP_RUNNER_SOURCES
     ${SNESRECOMP_RUNNER_ROOT}/src/snes/interp816.c
     ${SNESRECOMP_RUNNER_ROOT}/src/snes/tier2_capture.c
     ${SNESRECOMP_RUNNER_ROOT}/src/snes/interp_bridge.c
+    ${SNESRECOMP_RUNNER_ROOT}/src/snes/input_replay.c
 )
 
 # ── Capcom Cx4 coprocessor (Mega Man X2 / X3 only) ────────────────────────

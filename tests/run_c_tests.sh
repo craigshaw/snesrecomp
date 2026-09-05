@@ -160,6 +160,15 @@ echo "=== automatic joypad register byte order ==="
     -o "$OUT/auto_joypad_test"
 "$OUT/auto_joypad_test"
 
+echo "=== shared binary input replay ==="
+"$CC" -std=c11 -Wall -Wextra -Werror -O1 \
+    -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
+    "$ROOT/tests/joypad/input_replay_test.c" \
+    "$ROOT/runner/src/snes/input_replay.c" \
+    "$ROOT/runner/src/crc32.c" \
+    -o "$OUT/input_replay_test"
+(cd "$OUT" && ./input_replay_test)
+
 echo "=== runtime dispatch ==="
 "$CC" -std=c11 -Wall -Wextra -Werror -O1 \
     -I "$ROOT/runner/src/snes" \
