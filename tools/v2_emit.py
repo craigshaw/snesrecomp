@@ -23,6 +23,7 @@ from snes65816 import (  # noqa: E402
     register_reloc_region,
 )
 from v2.program_analysis import VariantKey  # noqa: E402
+from v2.event_precision import event_precision_profile_digest  # noqa: E402
 from v2.program_emit import (  # noqa: E402
     CACHE_FORMAT_VERSION,
     discover_host_roots,
@@ -256,9 +257,11 @@ def main() -> int:
         deny_gate = bool(os.environ.get("SNESRECOMP_EMIT_AOT_DENY_GATE"))
         event_audit = bool(os.environ.get(
             "SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT"))
+        event_precision = event_precision_profile_digest()
         return hashlib.sha256(
             (f"{tree_digest}\0aot_deny_gate={int(deny_gate)}"
-             f"\0event_crossing_audit={int(event_audit)}").encode()
+             f"\0event_crossing_audit={int(event_audit)}"
+             f"\0event_precision={event_precision}").encode()
         ).hexdigest()
 
     generator_digest = generator_digest_for(analysis_backend)

@@ -100,6 +100,36 @@ resumes interpreting at the same PC — correct, one redundant hop.
 already encodes: which PCs are the yield/die primitives (`hle_func` directives that
 minimal cfgs need anyway) — and those stubs name their own real ROM entries.
 
+## Audit-guided event precision
+
+Generated AOT code normally charges the static time for a complete basic block at
+the block entry. This is fast, but a long block can hide the exact instruction
+boundary where an NMI, IRQ, or other scheduler event becomes due.
+
+An event-crossing audit report can be used directly as a precision profile:
+
+```sh
+SNESRECOMP_EVENT_PRECISION_PROFILE=/path/to/event-crossing-audit.json \
+  python3 tools/v2_emit.py ...
+```
+
+The generator validates the `snesrecomp event crossing audit v1` report and maps
+each actionable `(pc24, M, X)` charge observation to its containing exact AOT
+function variant. When that variant is reached under the LLE scheduler, it unwinds
+to the owning interpreter at the function entry. The interpreter then applies
+instruction-level timing and can return at an exact event boundary. Other variants
+and execution outside the scheduler keep the normal compiled path.
+
+The function is selected rather than only the observed basic block because aggregate
+charges in earlier blocks can shift the clock before the observed charge is reached.
+A report with tuple overflow is rejected. IRQ tuples observed only while the I flag
+was set are ignored because those IRQs were not deliverable. The profile contents are
+part of the generated-output cache identity.
+
+This is an evidence-guided precision path, not a title-specific address list and not
+a global per-instruction check. The report remains an external build input and should
+be regenerated when replay coverage changes.
+
 ## Validation plan (the differential bonus)
 
 Rich-LLE-bounced vs rich-LLE-interpreted is a **whole-game codegen differential**: both

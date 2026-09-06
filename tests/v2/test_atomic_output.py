@@ -1,5 +1,6 @@
 """Transactional generated-output publication tests."""
 
+import json
 import os
 import pathlib
 import subprocess
@@ -150,3 +151,49 @@ def test_event_audit_mode_invalidates_published_output_cache():
             command, capture_output=True, text=True, env=normal_env)
         assert restored.returncode == 0, restored.stdout + restored.stderr
         assert 'interp_bridge_event_audit_charge' not in source_path.read_text()
+
+
+def test_event_precision_profile_contents_invalidate_published_output_cache():
+    with tempfile.TemporaryDirectory() as raw:
+        root = pathlib.Path(raw)
+        rom = bytearray([0xFF] * 0x8000)
+        rom[0] = 0x60  # RTS
+        rom_path = root / 'game.sfc'
+        rom_path.write_bytes(rom)
+        cfg_dir = root / 'cfg'
+        cfg_dir.mkdir()
+        (cfg_dir / 'bank00.cfg').write_text(
+            'bank = 00\nfunc Entry 8000 end:8001\n', encoding='utf-8')
+        out_dir = root / 'gen'
+        report_path = root / 'event-crossings.json'
+        command = [
+            sys.executable, str(REPO / 'tools' / 'v2_emit.py'),
+            '--rom', str(rom_path), '--cfg-dir', str(cfg_dir),
+            '--out-dir', str(out_dir), '--cfg-roots',
+            '--analysis-backend', 'python',
+        ]
+        env = dict(os.environ)
+        env['SNESRECOMP_EVENT_PRECISION_PROFILE'] = str(report_path)
+
+        def write_report(entries):
+            report_path.write_text(json.dumps({
+                'schema': 'snesrecomp event crossing audit v1',
+                'overflow': 0,
+                'entries': entries,
+            }), encoding='utf-8')
+
+        write_report([{
+            'pc24': 0x008000, 'm': 1, 'x': 1, 'event': 'nmi',
+            'hits': 1, 'irq_i_set_hits': 0,
+        }])
+        precise = subprocess.run(
+            command, capture_output=True, text=True, env=env)
+        assert precise.returncode == 0, precise.stdout + precise.stderr
+        source_path = out_dir / 'bank00_v2.c'
+        assert 'event-precision function' in source_path.read_text()
+
+        write_report([])
+        fast = subprocess.run(
+            command, capture_output=True, text=True, env=env)
+        assert fast.returncode == 0, fast.stdout + fast.stderr
+        assert 'event-precision function' not in source_path.read_text()

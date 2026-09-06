@@ -1,8 +1,11 @@
 """Axis-2 step C: the v2 emitter charges each block's static 65816 CPU
 cycles as a per-block constant (recompiler/snes_cycles.py via
 emit_function._block_cycle_const). Guards the cost-model -> emitter wiring."""
+import json
 import os
+import pathlib
 import re
+import tempfile
 
 from _helpers import make_lorom_bank0  # noqa: E402
 from v2.emit_function import emit_function  # noqa: E402
@@ -130,6 +133,96 @@ def test_event_crossing_audit_is_regeneration_opt_in():
         call = "interp_bridge_event_audit_charge(cpu, 0x008000u,"
         assert audited.count(call) == 2, audited
         assert audited.index(call) < audited.index("cpu->master_cycles += 72;")
+    finally:
+        os.environ.pop(name, None)
+        if previous is not None:
+            os.environ[name] = previous
+
+
+def _event_precision_report(path, entries, *, overflow=0):
+    pathlib.Path(path).write_text(json.dumps({
+        "schema": "snesrecomp event crossing audit v1",
+        "overflow": overflow,
+        "entries": entries,
+    }), encoding="utf-8")
+
+
+def test_event_precision_profile_routes_only_the_observed_mx_function_to_lle():
+    # An observation at a middle instruction must route from the containing
+    # function's architectural entry, before any earlier aggregate block charge.
+    rom = make_lorom_bank0({0x8000: bytes([0xEA, 0x0A, 0x60])})
+    name = 'SNESRECOMP_EVENT_PRECISION_PROFILE'
+    previous = os.environ.pop(name, None)
+    try:
+        normal = emit_function(rom, bank=0, start=0x8000,
+                               entry_m=1, entry_x=1)
+        assert "event-precision function" not in normal
+
+        with tempfile.TemporaryDirectory() as raw:
+            report = pathlib.Path(raw) / 'crossings.json'
+            _event_precision_report(report, [{
+                "pc24": 0x008001,
+                "m": 1,
+                "x": 1,
+                "event": "nmi",
+                "hits": 1,
+                "irq_i_set_hits": 0,
+            }])
+            os.environ[name] = str(report)
+            precise = emit_function(rom, bank=0, start=0x8000,
+                                    entry_m=1, entry_x=1)
+            assert "event-precision function" in precise
+            assert "interp_bridge_lle_yield_unwind(cpu, 0x008000u)" in precise
+
+            wrong_mx = emit_function(rom, bank=0, start=0x8000,
+                                     entry_m=0, entry_x=1)
+            assert "event-precision function" not in wrong_mx
+    finally:
+        os.environ.pop(name, None)
+        if previous is not None:
+            os.environ[name] = previous
+
+
+def test_event_precision_profile_ignores_fully_masked_irq_crossing():
+    rom = make_lorom_bank0({0x8000: bytes([0xEA, 0x60])})
+    name = 'SNESRECOMP_EVENT_PRECISION_PROFILE'
+    previous = os.environ.pop(name, None)
+    try:
+        with tempfile.TemporaryDirectory() as raw:
+            report = pathlib.Path(raw) / 'crossings.json'
+            _event_precision_report(report, [{
+                "pc24": 0x008000,
+                "m": 1,
+                "x": 1,
+                "event": "irq",
+                "hits": 2,
+                "irq_i_set_hits": 2,
+            }])
+            os.environ[name] = str(report)
+            src = emit_function(rom, bank=0, start=0x8000,
+                                entry_m=1, entry_x=1)
+            assert "event-precision function" not in src
+    finally:
+        os.environ.pop(name, None)
+        if previous is not None:
+            os.environ[name] = previous
+
+
+def test_event_precision_profile_rejects_incomplete_audit():
+    rom = make_lorom_bank0({0x8000: bytes([0x60])})
+    name = 'SNESRECOMP_EVENT_PRECISION_PROFILE'
+    previous = os.environ.pop(name, None)
+    try:
+        with tempfile.TemporaryDirectory() as raw:
+            report = pathlib.Path(raw) / 'crossings.json'
+            _event_precision_report(report, [], overflow=1)
+            os.environ[name] = str(report)
+            try:
+                emit_function(rom, bank=0, start=0x8000,
+                              entry_m=1, entry_x=1)
+                assert False, "overflowed audit must be rejected"
+            except ValueError as exc:
+                assert "incomplete" in str(exc)
     finally:
         os.environ.pop(name, None)
         if previous is not None:

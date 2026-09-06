@@ -39,6 +39,7 @@ from v2.naming import (  # noqa: E402
     default_func_name as _default_func_name,
     variant_suffix as _variant_suffix,
 )
+from v2.event_precision import load_event_precision_sites  # noqa: E402
 from snes_cycles import (  # noqa: E402
     block_static_cycles, instr_runtime_charges, region_speed,
 )
@@ -630,6 +631,15 @@ def emit_function(rom: bytes, bank: int, start: int,
     if unresolved_indirect_collector is not None:
         unresolved_indirect_collector.extend(graph.unresolved_indirects)
     cfg = build_cfg(graph)
+
+    event_precision_sites = load_event_precision_sites()
+    event_precision_function = any(
+        (di.insn.addr & 0xFFFFFF,
+         di.insn.m_flag & 1,
+         di.insn.x_flag & 1) in event_precision_sites
+        for precision_block in cfg.blocks.values()
+        for di in precision_block.insns
+    )
 
     # A tight, side-effect-free memory poll cannot execute atomically under
     # the LLE frame scheduler: the value it observes is commonly changed by
@@ -2048,6 +2058,17 @@ def emit_function(rom: bytes, bank: int, start: int,
     # Trace ring: function entry (carries name hash) — first entry per call.
     fn_entry_pc = (bank << 16) | (start & 0xFFFF)
     src.append(f'  cpu_trace_func_entry(cpu, 0x{fn_entry_pc:06X}, "{func_name}");')
+    # A crossing proves that aggregate charges somewhere in this exact AOT
+    # function variant can hide a scheduler boundary. Hand the whole function
+    # back to the owning interpreter: earlier aggregate-charged blocks can
+    # otherwise shift the clock before the observed crossing block is reached.
+    if event_precision_function:
+        src.append('  if (interp_bridge_in_lle_scheduler()) {')
+        src.append('    RecompStackPop();')
+        src.append(
+            f'    return interp_bridge_lle_yield_unwind('
+            f'cpu, 0x{fn_entry_pc:06X}u);  /* event-precision function */')
+        src.append('  }')
     # A profile-promoted AOT call tree can stay native across enough guest
     # calls to cross an event-driven host's frame deadline. Yield before
     # entering the next architectural callee so the owning interpreter can
