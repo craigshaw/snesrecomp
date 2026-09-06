@@ -579,7 +579,7 @@ int main(void) {
         ppu_reset(ppu);
         ppu->bgmode = 1;
         ppu->bgXsc[0] = 0x48;
-        ppu->bgTileAdr = 0x0555;
+        ppu->bgTileAdr = 0x0055;
         ppu->screenEnabled[0] = 0x13;
         ppu_rasterBegin(ppu);
 
@@ -592,6 +592,8 @@ int main(void) {
         raster_write(ppu, 0x210E, 0, 0x00);
         raster_write(ppu, 0x212C, 0, 0x11);
 
+        raster_write(ppu, 0x210C, 60, 0x05);
+
         raster_write(ppu, 0x2105, 120, 0x01);
         raster_write(ppu, 0x2107, 120, 0x48);
         raster_write(ppu, 0x210B, 120, 0x55);
@@ -603,7 +605,7 @@ int main(void) {
 
         ppu_rasterRenderBegin(ppu);
         failures += check(ppu->bgmode == 7 && ppu->bgXsc[0] == 0x43 &&
-                              (ppu->bgTileAdr & 0xff) == 0x50,
+                              ppu->bgTileAdr == 0x0050,
                           "raster baseline restores Mode 7 addressing");
         failures += check(ppu->hScroll[0] == 128 && ppu->vScroll[0] == 184 &&
                               ppu->m7matrix[6] == 128 &&
@@ -612,9 +614,13 @@ int main(void) {
         failures += check(ppu->screenEnabled[0] == 0x11,
                           "raster baseline restores top-band layers");
 
+        ppu_rasterApplyLine(ppu, 60);
+        failures += check(ppu->bgTileAdr == 0x0550,
+                          "raster replay preserves active-display BG3 addressing");
+
         ppu_rasterApplyLine(ppu, 120);
         failures += check(ppu->bgmode == 1 && ppu->bgXsc[0] == 0x48 &&
-                              (ppu->bgTileAdr & 0xff) == 0x55,
+                              ppu->bgTileAdr == 0x0555,
                           "raster split restores Mode 1 addressing");
         failures += check(ppu->hScroll[0] == 0 && ppu->vScroll[0] == 0 &&
                               ppu->m7matrix[6] == 0 &&

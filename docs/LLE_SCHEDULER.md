@@ -195,7 +195,8 @@ display state. Call `ppu_rasterBegin()` before running the field, then call
 `ppu_rasterRenderBegin()` once and `ppu_rasterApplyLine()` before each
 `ppu_runLine()`. Generated direct writes and emulated B-bus writes both enter
 the journal, so interpreted CPU, DMA, and HDMA changes are covered. The journal
-contains display state such as mode, BG1 addressing and scroll, and layer masks.
+contains display state such as mode, BG character addressing, BG1 tilemap and
+scroll, and layer masks.
 It deliberately excludes VRAM, CGRAM, and OAM data ports because replaying those
 uploads would apply them twice.
 

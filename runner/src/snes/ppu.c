@@ -2358,6 +2358,7 @@ static int raster_reg_journaled(uint16_t reg) {
     case 0x2105:                 /* BGMODE */
     case 0x2107:                 /* BG1SC */
     case 0x210B:                 /* BG12NBA */
+    case 0x210C:                 /* BG34NBA */
     case 0x210D: case 0x210E:    /* BG1HOFS / BG1VOFS */
     case 0x212C: case 0x212E:    /* TM / TMW */
     case 0x2131:                 /* CGADSUB */
@@ -2409,6 +2410,11 @@ void ppu_rasterRecord(uint16_t reg, uint16_t line, uint8_t val) {
       case 0x210B:
         s_raster0.bgTileAdr =
             (uint16_t)((s_raster0.bgTileAdr & 0xff00u) | val);
+        break;
+      case 0x210C:
+        s_raster0.bgTileAdr =
+            (uint16_t)((s_raster0.bgTileAdr & 0x00ffu) |
+                       ((uint16_t)val << 8));
         break;
       case 0x210D:
         s_raster0.m7h = (int16_t)(((uint16_t)val << 8 |
