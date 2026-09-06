@@ -263,6 +263,7 @@ uint8_t snes_readBBus(Snes* snes, uint8_t adr) {
 void snes_writeBBus(Snes* snes, uint8_t adr, uint8_t val) {
   if(adr < 0x40) {
     ppu_write(g_ppu, adr, val);
+    ppu_rasterRecord((uint16_t)(0x2100u + adr), snes->vPos, val);
     return;
   }
   if(adr < 0x80) {

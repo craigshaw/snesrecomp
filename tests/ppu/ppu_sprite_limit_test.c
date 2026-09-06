@@ -115,6 +115,11 @@ static void render_one_line(Ppu *ppu) {
     ppu_runLine(ppu, 1);
 }
 
+static void raster_write(Ppu *ppu, uint16_t reg, uint16_t line, uint8_t val) {
+    ppu_write(ppu, (uint8_t)reg, val);
+    ppu_rasterRecord(reg, line, val);
+}
+
 static unsigned count_argb_pixels(const uint32_t *pixels, size_t count) {
     unsigned nonzero = 0;
     for (size_t i = 0; i < count; i++) {
@@ -566,6 +571,57 @@ int main(void) {
         ppu_runLine(ppu, 1);
         failures += check(wide_pixels[kExtra - 1] != 0,
                           "NULL left hints restore legacy margin behavior");
+    }
+
+    /* A frame-model host must restore every part of a Mode 7 to Mode 1 raster
+     * split, including the Mode 7 copies of the shared BG1 scroll registers. */
+    {
+        ppu_reset(ppu);
+        ppu->bgmode = 1;
+        ppu->bgXsc[0] = 0x48;
+        ppu->bgTileAdr = 0x0555;
+        ppu->screenEnabled[0] = 0x13;
+        ppu_rasterBegin(ppu);
+
+        raster_write(ppu, 0x2105, 0, 0x07);
+        raster_write(ppu, 0x2107, 0, 0x43);
+        raster_write(ppu, 0x210B, 0, 0x50);
+        raster_write(ppu, 0x210D, 0, 0x80);
+        raster_write(ppu, 0x210D, 0, 0x00);
+        raster_write(ppu, 0x210E, 0, 0xB8);
+        raster_write(ppu, 0x210E, 0, 0x00);
+        raster_write(ppu, 0x212C, 0, 0x11);
+
+        raster_write(ppu, 0x2105, 120, 0x01);
+        raster_write(ppu, 0x2107, 120, 0x48);
+        raster_write(ppu, 0x210B, 120, 0x55);
+        raster_write(ppu, 0x210D, 120, 0x00);
+        raster_write(ppu, 0x210D, 120, 0x00);
+        raster_write(ppu, 0x210E, 120, 0x00);
+        raster_write(ppu, 0x210E, 120, 0x00);
+        raster_write(ppu, 0x212C, 120, 0x13);
+
+        ppu_rasterRenderBegin(ppu);
+        failures += check(ppu->bgmode == 7 && ppu->bgXsc[0] == 0x43 &&
+                              (ppu->bgTileAdr & 0xff) == 0x50,
+                          "raster baseline restores Mode 7 addressing");
+        failures += check(ppu->hScroll[0] == 128 && ppu->vScroll[0] == 184 &&
+                              ppu->m7matrix[6] == 128 &&
+                              ppu->m7matrix[7] == 184,
+                          "raster baseline restores shared BG1 and Mode 7 scroll");
+        failures += check(ppu->screenEnabled[0] == 0x11,
+                          "raster baseline restores top-band layers");
+
+        ppu_rasterApplyLine(ppu, 120);
+        failures += check(ppu->bgmode == 1 && ppu->bgXsc[0] == 0x48 &&
+                              (ppu->bgTileAdr & 0xff) == 0x55,
+                          "raster split restores Mode 1 addressing");
+        failures += check(ppu->hScroll[0] == 0 && ppu->vScroll[0] == 0 &&
+                              ppu->m7matrix[6] == 0 &&
+                              ppu->m7matrix[7] == 0,
+                          "raster split updates shared BG1 and Mode 7 scroll");
+        failures += check(ppu->screenEnabled[0] == 0x13,
+                          "raster split restores bottom-band layers");
     }
 
     ppu_free(ppu);

@@ -2317,6 +2317,9 @@ uint8_t ppu_read(Ppu* ppu, uint8_t adr) {
  * Rendering the whole frame with the final state drew the demo black
  * (measured: 61/61 frames rendered forcedBlank), and with INIDISP-only
  * replay the HUD band drew black while the reference shows the health bars.
+ * Super Tennis also switches BG1 from Mode 7 court data to a Mode 1 menu
+ * during player selection. Replaying only the final Mode 1 state duplicates
+ * the menu into the court band.
  *
  * Same defect class the HDMA engine solved (dma_initHdma/dma_doHdma):
  * record during CPU time, replay per line at render time. The host brackets:
@@ -2324,10 +2327,12 @@ uint8_t ppu_read(Ppu* ppu, uint8_t adr) {
  *                                     line-0 state, including the write-twice
  *                                     scroll latch
  *   ppu_rasterApplyLine(ppu, line)    in the render loop before ppu_runLine
- * The register-write path calls ppu_rasterRecord with the beam line.
+ * Both the generated direct-register path and the emulated B-bus path call
+ * ppu_rasterRecord with the beam line. The latter includes interpreted CPU,
+ * DMA, and HDMA writes.
  *
  * Registers journaled: the set the split handlers write. Data ports (VRAM/
- * CGRAM/OAM) are deliberately excluded — those are uploads, not per-line
+ * CGRAM/OAM) are deliberately excluded. Those are uploads, not per-line
  * display state, and replaying them would double-apply the data. */
 #define PPU_RASTER_MAX 256
 typedef struct { uint8_t line; uint16_t reg; uint8_t val; } PpuRasterEntry;
@@ -2339,14 +2344,20 @@ static uint8_t s_raster_hdmaen;
 static int s_raster_hdmaen_pending;
 static struct {
   uint8_t inidisp;
+  uint8_t bgmode, bg1sc;
+  uint16_t bgTileAdr;
   uint16_t hScroll0, vScroll0;
+  int16_t m7h, m7v;
   uint8_t tm, tmw, cgadsub, hdmaen;
-  uint8_t scrollPrev, scrollPrev2;
+  uint8_t scrollPrev, scrollPrev2, m7prev;
 } s_raster0;
 
 static int raster_reg_journaled(uint16_t reg) {
   switch (reg) {
     case 0x2100:                 /* INIDISP */
+    case 0x2105:                 /* BGMODE */
+    case 0x2107:                 /* BG1SC */
+    case 0x210B:                 /* BG12NBA */
     case 0x210D: case 0x210E:    /* BG1HOFS / BG1VOFS */
     case 0x212C: case 0x212E:    /* TM / TMW */
     case 0x2131:                 /* CGADSUB */
@@ -2370,14 +2381,20 @@ void ppu_rasterBegin(Ppu *ppu) {
   s_raster_next = 0;
   s_raster_armed = 1;
   s_raster0.inidisp = ppu->inidisp;      /* post-vblank state = line-0 state */
+  s_raster0.bgmode = ppu->bgmode;
+  s_raster0.bg1sc = ppu->bgXsc[0];
+  s_raster0.bgTileAdr = ppu->bgTileAdr;
   s_raster0.hScroll0 = ppu->hScroll[0];
   s_raster0.vScroll0 = ppu->vScroll[0];
+  s_raster0.m7h = ppu->m7matrix[6];
+  s_raster0.m7v = ppu->m7matrix[7];
   s_raster0.tm = ppu->screenEnabled[0];
   s_raster0.tmw = ppu->screenWindowed[0];
   s_raster0.cgadsub = ppu->cgadsub;
   s_raster0.hdmaen = g_snesrecomp_last_hdmaen;
   s_raster0.scrollPrev = ppu->scrollPrev;
   s_raster0.scrollPrev2 = ppu->scrollPrev2;
+  s_raster0.m7prev = ppu->m7prev;
 }
 
 void ppu_rasterRecord(uint16_t reg, uint16_t line, uint8_t val) {
@@ -2387,13 +2404,26 @@ void ppu_rasterRecord(uint16_t reg, uint16_t line, uint8_t val) {
      * Track it in the snapshot so late-vblank writes are not lost. */
     switch (reg) {
       case 0x2100: s_raster0.inidisp = val; break;
+      case 0x2105: s_raster0.bgmode = val; break;
+      case 0x2107: s_raster0.bg1sc = val; break;
+      case 0x210B:
+        s_raster0.bgTileAdr =
+            (uint16_t)((s_raster0.bgTileAdr & 0xff00u) | val);
+        break;
       case 0x210D:
-        s_raster0.hScroll0 =
-            (uint16_t)((val << 8 | s_raster0.scrollPrev) & 0x3FF);
+        s_raster0.m7h = (int16_t)(((uint16_t)val << 8 |
+                                   s_raster0.m7prev) & 0x1FFF);
+        s_raster0.m7prev = val;
+        s_raster0.hScroll0 = (uint16_t)(((uint16_t)val << 8 |
+            (s_raster0.scrollPrev & 0xF8) |
+            (s_raster0.scrollPrev2 & 0x07)) & 0x3FF);
         s_raster0.scrollPrev = val;
         s_raster0.scrollPrev2 = val;
         break;
       case 0x210E:
+        s_raster0.m7v = (int16_t)(((uint16_t)val << 8 |
+                                   s_raster0.m7prev) & 0x1FFF);
+        s_raster0.m7prev = val;
         s_raster0.vScroll0 =
             (uint16_t)((val << 8 | s_raster0.scrollPrev) & 0x3FF);
         s_raster0.scrollPrev = val;
@@ -2430,13 +2460,19 @@ void ppu_rasterRenderBegin(Ppu *ppu) {
   if (!s_raster_armed) return;
   s_raster_hdmaen_pending = 0;
   ppu->inidisp = s_raster0.inidisp;
+  ppu->bgmode = s_raster0.bgmode;
+  ppu->bgXsc[0] = s_raster0.bg1sc;
+  ppu->bgTileAdr = s_raster0.bgTileAdr;
   ppu->hScroll[0] = s_raster0.hScroll0;
   ppu->vScroll[0] = s_raster0.vScroll0;
+  ppu->m7matrix[6] = s_raster0.m7h;
+  ppu->m7matrix[7] = s_raster0.m7v;
   ppu->screenEnabled[0] = s_raster0.tm;
   ppu->screenWindowed[0] = s_raster0.tmw;
   ppu->cgadsub = s_raster0.cgadsub;
   ppu->scrollPrev = s_raster0.scrollPrev;
   ppu->scrollPrev2 = s_raster0.scrollPrev2;
+  ppu->m7prev = s_raster0.m7prev;
   s_raster_next = 0;
 }
 
@@ -2450,13 +2486,18 @@ int ppu_rasterDebugDump(char *out, int cap) {
   int i;
   pos += snprintf(out + pos, cap - pos,
                   "{\"count\":%d,\"armed\":%d,"
-                  "\"base\":{\"inidisp\":\"0x%02X\",\"tm\":\"0x%02X\","
+                  "\"base\":{\"inidisp\":\"0x%02X\","
+                  "\"bgmode\":\"0x%02X\",\"bg1sc\":\"0x%02X\","
+                  "\"bgTileAdr\":\"0x%04X\",\"tm\":\"0x%02X\","
                   "\"tmw\":\"0x%02X\",\"cgadsub\":\"0x%02X\","
-                  "\"bg1h\":%u,\"bg1v\":%u},\"entries\":[",
+                  "\"bg1h\":%u,\"bg1v\":%u,\"m7h\":%d,\"m7v\":%d},"
+                  "\"entries\":[",
                   s_raster_count, s_raster_armed,
-                  s_raster0.inidisp, s_raster0.tm, s_raster0.tmw,
-                  s_raster0.cgadsub,
-                  (unsigned)s_raster0.hScroll0, (unsigned)s_raster0.vScroll0);
+                  s_raster0.inidisp, s_raster0.bgmode, s_raster0.bg1sc,
+                  s_raster0.bgTileAdr, s_raster0.tm, s_raster0.tmw,
+                  s_raster0.cgadsub, (unsigned)s_raster0.hScroll0,
+                  (unsigned)s_raster0.vScroll0, s_raster0.m7h,
+                  s_raster0.m7v);
   for (i = 0; i < s_raster_count && pos < cap - 64; i++) {
     pos += snprintf(out + pos, cap - pos, "%s{\"l\":%u,\"r\":\"0x%04X\",\"v\":\"0x%02X\"}",
                     i ? "," : "", (unsigned)s_raster[i].line,

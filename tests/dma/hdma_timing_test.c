@@ -22,6 +22,10 @@ void wlog_addr_note_direct(uint32_t wa, uint8_t v, const char *via) {
 
 static uint8_t ram[0x20000];
 static uint8_t ppu_regs[0x40];
+static unsigned raster_record_count;
+static uint16_t raster_record_reg;
+static uint16_t raster_record_line;
+static uint8_t raster_record_value;
 
 uint8_t ppu_read(Ppu *ppu, uint8_t adr) {
     (void)ppu;
@@ -31,6 +35,13 @@ uint8_t ppu_read(Ppu *ppu, uint8_t adr) {
 void ppu_write(Ppu *ppu, uint8_t adr, uint8_t val) {
     (void)ppu;
     ppu_regs[adr & 0x3f] = val;
+}
+
+void ppu_rasterRecord(uint16_t reg, uint16_t line, uint8_t val) {
+    raster_record_count++;
+    raster_record_reg = reg;
+    raster_record_line = line;
+    raster_record_value = val;
 }
 
 void RtlApuLock(void) {}
@@ -127,6 +138,11 @@ int main(void) {
     failures += check(ppu_regs[0x26] == 0x00, "HDMA does not fire before HBlank");
     snes_advance_master_cycles(&snes, 1);
     failures += check(ppu_regs[0x26] == 0x44, "HDMA fires at HBlank");
+    failures += check(raster_record_count == 1 &&
+                          raster_record_reg == 0x2126 &&
+                          raster_record_line == 0 &&
+                          raster_record_value == 0x44,
+                      "B-bus PPU writes reach the raster journal");
     failures += check(dma->channel[0].tableAdr == 0x0103, "HDMA consumed terminator at timing edge");
 
     snes_advance_master_cycles(&snes, 1364u * 262u - 1024u);
