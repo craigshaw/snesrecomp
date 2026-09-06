@@ -101,7 +101,8 @@ def _block_speed(bank: int, pc: int):
     return (f"(g_memsel ? {s_fast} : {s_slow})", None)
 
 
-def _dynamic_charge_lines(insn, speed_expr: str = "8") -> List[str]:
+def _dynamic_charge_lines(insn, speed_expr: str = "8",
+                          audit_pc24: Optional[int] = None) -> List[str]:
     """Runtime-only per-instruction cycle charges (Axis-2 step C dynamics),
     emitted as conditional `cpu->cycles += 1;` statements just before the
     instruction's effect. Branch-taken is charged at the terminator instead.
@@ -119,9 +120,15 @@ def _dynamic_charge_lines(insn, speed_expr: str = "8") -> List[str]:
         return []
     charges = instr_runtime_charges(op)
     out: List[str] = []
+    audit = (audit_pc24 is not None and
+             os.environ.get('SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT'))
+    audit_call = (
+        f"interp_bridge_event_audit_charge(cpu, 0x{audit_pc24:06X}u, "
+        f"{speed_expr}); " if audit else ""
+    )
     if 'dp' in charges:
         out.append(
-            f"if (cpu->D & 0xFF) {{ cpu->cycles += 1; "
+            f"if (cpu->D & 0xFF) {{ {audit_call}cpu->cycles += 1; "
             f"cpu->master_cycles += {speed_expr}; }}  /* D.l != 0 */")
     if 'xcross' in charges:
         mode = getattr(insn, 'mode', None)
@@ -129,12 +136,14 @@ def _dynamic_charge_lines(insn, speed_expr: str = "8") -> List[str]:
         if mode == _MODE_ABS_X:
             out.append(
                 f"if ((0x{base:04X} & 0xFF00) != ((0x{base:04X} + cpu->X) & 0xFF00))"
-                f" {{ cpu->cycles += 1; cpu->master_cycles += {speed_expr}; }}"
+                f" {{ {audit_call}cpu->cycles += 1; "
+                f"cpu->master_cycles += {speed_expr}; }}"
                 f"  /* abs,X read page-cross */")
         elif mode == _MODE_ABS_Y:
             out.append(
                 f"if ((0x{base:04X} & 0xFF00) != ((0x{base:04X} + cpu->Y) & 0xFF00))"
-                f" {{ cpu->cycles += 1; cpu->master_cycles += {speed_expr}; }}"
+                f" {{ {audit_call}cpu->cycles += 1; "
+                f"cpu->master_cycles += {speed_expr}; }}"
                 f"  /* abs,Y read page-cross */")
         # INDIR_Y (dp),Y: effective pointer is loaded at runtime from DP — not
         # reconstructable from the static operand; left as a measured residual.
@@ -1352,6 +1361,8 @@ def emit_function(rom: bytes, bank: int, start: int,
         # Axis-5: master-clocks-per-CPU-cycle for this block's code region, used
         # to weight the dynamic (D.l/page-cross/branch-taken) master charges.
         _blk_spd_expr, _blk_spd_const = _block_speed(bank, key.pc)
+        _event_audit = bool(
+            os.environ.get('SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT'))
 
         # Iterate the pre-lowered (Insn, [IROp]) pairs. Calling lower()
         # again here would mint fresh Value-ids and break codegen's
@@ -1505,7 +1516,10 @@ def emit_function(rom: bytes, bank: int, start: int,
                 continue
             # Axis-2 step C dynamics: charge runtime-only modifiers (D.l != 0,
             # abs,X/Y read page-cross) for this instruction before its effect.
-            for _ln in _dynamic_charge_lines(di_insn, _blk_spd_expr):
+            _audit_pc24 = getattr(
+                di_insn, 'addr', (bank << 16) | (key.pc & 0xFFFF))
+            for _ln in _dynamic_charge_lines(
+                    di_insn, _blk_spd_expr, _audit_pc24):
                 lines.append(_ln)
             for op in ir_ops:
                 if isinstance(op, CondBranch):
@@ -1516,6 +1530,7 @@ def emit_function(rom: bytes, bank: int, start: int,
                     taken = succs[1] if len(succs) >= 2 else None
                     pred = f"{_reg_for_flag(op.flag)} == {op.take_if}"
                     blk_pc24 = (bank << 16) | (key.pc & 0xFFFF)
+                    branch_pc24 = getattr(di_insn, 'addr', blk_pc24)
                     if taken is not None:
                         target_stmt = _goto_or_return(taken, source_pc24=blk_pc24)
                         # Axis-2: a taken conditional branch costs +1 cycle (the
@@ -1523,7 +1538,11 @@ def emit_function(rom: bytes, bank: int, start: int,
                         # the emulation-only page-cross +1 is omitted (SNES game
                         # code runs e=0).
                         lines.append(
-                            f"if ({pred}) {{ cpu->cycles += 1; "
+                            f"if ({pred}) {{ "
+                            + (f"interp_bridge_event_audit_charge(cpu, "
+                               f"0x{branch_pc24:06X}u, {_blk_spd_expr}); "
+                               if _event_audit else "")
+                            + f"cpu->cycles += 1; "
                             f"cpu->master_cycles += {_blk_spd_expr}; {target_stmt} }}")
                     if fall is not None:
                         lines.append(_goto_or_return(fall, source_pc24=blk_pc24)
@@ -2152,8 +2171,18 @@ def emit_function(rom: bytes, bank: int, start: int,
             src.append(f'    cpu->cycles += {_cyc_const};')
             _spd_expr, _spd_const = _block_speed(bank, key.pc)
             if _spd_const is not None:
+                if os.environ.get('SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT'):
+                    src.append(
+                        f'    interp_bridge_event_audit_charge(cpu, '
+                        f'0x{block_pc24:06X}u, '
+                        f'{_cyc_const * _spd_const}u);')
                 src.append(f'    cpu->master_cycles += {_cyc_const * _spd_const};')
             else:
+                if os.environ.get('SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT'):
+                    src.append(
+                        f'    interp_bridge_event_audit_charge(cpu, '
+                        f'0x{block_pc24:06X}u, '
+                        f'{_cyc_const} * {_spd_expr});')
                 src.append(f'    cpu->master_cycles += {_cyc_const} * {_spd_expr};')
         for ln in block_lines[key]:
             # Inject RecompStackPop before any return so the stack stays balanced.

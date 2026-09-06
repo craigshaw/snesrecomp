@@ -358,6 +358,233 @@ static int      s_lle_next_unwind_is_deadline = 0;
 static uint32_t s_lle_resume_pc24   = 0;
 static int      s_lle_wai_yield     = 0;
 static uint64_t s_lle_master_deadline = 0;
+static InterpDeadlineEvent s_lle_master_deadline_event =
+    INTERP_DEADLINE_EVENT_UNKNOWN;
+
+typedef struct EventCrossingSite {
+    uint32_t pc24;
+    uint8_t mx;
+    uint8_t event;
+    uint64_t hits;
+    uint64_t irq_i_set_hits;
+    uint64_t max_lateness;
+    uint64_t max_charge;
+    uint64_t first_start;
+    uint64_t first_deadline;
+    uint64_t first_end;
+    int first_frame;
+    int last_frame;
+} EventCrossingSite;
+
+static EventCrossingSite *s_event_crossings;
+static int s_event_crossing_count;
+static int s_event_crossing_capacity;
+static uint64_t s_event_crossing_total;
+static uint64_t s_event_crossing_irq_i_set_total;
+static uint64_t s_event_crossing_overflow;
+static int s_event_audit_initialized;
+static int s_event_audit_enabled;
+static int s_event_audit_atexit_registered;
+static char s_event_audit_path[1024];
+
+static const char *event_crossing_kind_name(uint8_t event) {
+    switch ((InterpDeadlineEvent)event) {
+    case INTERP_DEADLINE_EVENT_VBLANK: return "vblank";
+    case INTERP_DEADLINE_EVENT_NMI: return "nmi";
+    case INTERP_DEADLINE_EVENT_IRQ: return "irq";
+    default: return "unknown";
+    }
+}
+
+static void event_crossing_json_string(FILE *file, const char *value) {
+    fputc('"', file);
+    for (const unsigned char *p = (const unsigned char *)(value ? value : "");
+         *p; ++p) {
+        if (*p == '"' || *p == '\\')
+            fputc('\\', file);
+        if (*p >= 0x20)
+            fputc(*p, file);
+    }
+    fputc('"', file);
+}
+
+extern const char *rtl_game_title(void);
+
+int interp_bridge_event_audit_write_report(void) {
+    if (!s_event_audit_enabled || !s_event_audit_path[0])
+        return 1;
+    FILE *file = fopen(s_event_audit_path, "wb");
+    if (!file) {
+        fprintf(stderr, "[event-crossing] cannot write report '%s'\n",
+                s_event_audit_path);
+        return 0;
+    }
+    fputs("{\n  \"schema\": \"snesrecomp event crossing audit v1\",\n"
+          "  \"title\": ", file);
+    event_crossing_json_string(file, rtl_game_title());
+    fprintf(file,
+            ",\n  \"scope\": \"generated clock-charge intervals\",\n"
+            "  \"deadline_source\": \"host scheduler\",\n"
+            "  \"crossings\": %llu,\n  \"distinct_tuples\": %d,\n"
+            "  \"irq_i_set_crossings\": %llu,\n  \"overflow\": %llu,\n"
+            "  \"entries\": [\n",
+            (unsigned long long)s_event_crossing_total,
+            s_event_crossing_count,
+            (unsigned long long)s_event_crossing_irq_i_set_total,
+            (unsigned long long)s_event_crossing_overflow);
+    for (int i = 0; i < s_event_crossing_count; ++i) {
+        const EventCrossingSite *site = &s_event_crossings[i];
+        fprintf(file,
+                "    %s{\"pc24\": %u, \"pc\": \"$%06X\", "
+                "\"m\": %u, \"x\": %u, \"event\": \"%s\", "
+                "\"hits\": %llu, \"irq_i_set_hits\": %llu, "
+                "\"max_lateness\": %llu, \"max_charge\": %llu, "
+                "\"first_start\": %llu, \"first_deadline\": %llu, "
+                "\"first_end\": %llu, \"first_frame\": %d, "
+                "\"last_frame\": %d}",
+                i ? ",\n" : "", site->pc24, site->pc24,
+                (unsigned)((site->mx >> 1) & 1u),
+                (unsigned)(site->mx & 1u),
+                event_crossing_kind_name(site->event),
+                (unsigned long long)site->hits,
+                (unsigned long long)site->irq_i_set_hits,
+                (unsigned long long)site->max_lateness,
+                (unsigned long long)site->max_charge,
+                (unsigned long long)site->first_start,
+                (unsigned long long)site->first_deadline,
+                (unsigned long long)site->first_end,
+                site->first_frame, site->last_frame);
+    }
+    fputs("\n  ]\n}\n", file);
+    if (fclose(file) != 0)
+        return 0;
+    fprintf(stderr,
+            "[event-crossing] report=%s crossings=%llu distinct=%d "
+            "irq_i_set=%llu overflow=%llu\n",
+            s_event_audit_path,
+            (unsigned long long)s_event_crossing_total,
+            s_event_crossing_count,
+            (unsigned long long)s_event_crossing_irq_i_set_total,
+            (unsigned long long)s_event_crossing_overflow);
+    return 1;
+}
+
+static void event_crossing_audit_atexit(void) {
+    (void)interp_bridge_event_audit_write_report();
+}
+
+static void event_crossing_audit_initialize(void) {
+    if (s_event_audit_initialized)
+        return;
+    s_event_audit_initialized = 1;
+    const char *path = getenv("SNESRECOMP_EVENT_CROSSING_AUDIT");
+    if (!path || !path[0])
+        return;
+    size_t length = strlen(path);
+    if (length >= sizeof(s_event_audit_path)) {
+        fprintf(stderr, "[event-crossing] report path is too long\n");
+        return;
+    }
+    memcpy(s_event_audit_path, path, length + 1);
+    s_event_audit_enabled = 1;
+    if (!s_event_audit_atexit_registered) {
+        s_event_audit_atexit_registered = 1;
+        atexit(event_crossing_audit_atexit);
+    }
+}
+
+void interp_bridge_event_audit_charge(const CpuState *cpu, uint32_t pc24,
+                                      uint64_t master_clocks) {
+    event_crossing_audit_initialize();
+    if (!s_event_audit_enabled || !cpu || !master_clocks ||
+        !s_lle_master_deadline)
+        return;
+    const uint64_t start = cpu->master_cycles;
+    const uint64_t end = start + master_clocks;
+    if (end < start || s_lle_master_deadline <= start ||
+        s_lle_master_deadline >= end)
+        return;
+
+    const uint32_t key_pc = pc24 & 0xFFFFFFu;
+    const uint8_t mx = (uint8_t)(((cpu->m_flag & 1u) << 1) |
+                                 (cpu->x_flag & 1u));
+    const uint8_t event = (uint8_t)s_lle_master_deadline_event;
+    int i;
+    for (i = 0; i < s_event_crossing_count; ++i) {
+        EventCrossingSite *site = &s_event_crossings[i];
+        if (site->pc24 == key_pc && site->mx == mx && site->event == event)
+            break;
+    }
+    if (i == s_event_crossing_count) {
+        if (i == s_event_crossing_capacity) {
+            int next = s_event_crossing_capacity
+                           ? s_event_crossing_capacity * 2
+                           : 64;
+            EventCrossingSite *grown = (EventCrossingSite *)realloc(
+                s_event_crossings, (size_t)next * sizeof(*s_event_crossings));
+            if (!grown) {
+                s_event_crossing_overflow++;
+                return;
+            }
+            s_event_crossings = grown;
+            s_event_crossing_capacity = next;
+        }
+        EventCrossingSite *site = &s_event_crossings[i];
+        memset(site, 0, sizeof(*site));
+        site->pc24 = key_pc;
+        site->mx = mx;
+        site->event = event;
+        site->first_start = start;
+        site->first_deadline = s_lle_master_deadline;
+        site->first_end = end;
+        site->first_frame = snes_frame_counter;
+        s_event_crossing_count++;
+        fprintf(stderr,
+                "[event-crossing] first event=%s pc=$%06X M%uX%u "
+                "start=%llu deadline=%llu end=%llu frame=%d\n",
+                event_crossing_kind_name(event), key_pc,
+                (unsigned)((mx >> 1) & 1u), (unsigned)(mx & 1u),
+                (unsigned long long)start,
+                (unsigned long long)s_lle_master_deadline,
+                (unsigned long long)end, snes_frame_counter);
+    }
+    EventCrossingSite *site = &s_event_crossings[i];
+    const uint64_t lateness = end - s_lle_master_deadline;
+    site->hits++;
+    site->last_frame = snes_frame_counter;
+    if (lateness > site->max_lateness)
+        site->max_lateness = lateness;
+    if (master_clocks > site->max_charge)
+        site->max_charge = master_clocks;
+    if (event == INTERP_DEADLINE_EVENT_IRQ && cpu->_flag_I) {
+        site->irq_i_set_hits++;
+        s_event_crossing_irq_i_set_total++;
+    }
+    s_event_crossing_total++;
+}
+
+#ifdef SNESRECOMP_TIER2_TEST
+void interp_bridge_event_audit_test_reset(void) {
+    free(s_event_crossings);
+    s_event_crossings = NULL;
+    s_event_crossing_count = 0;
+    s_event_crossing_capacity = 0;
+    s_event_crossing_total = 0;
+    s_event_crossing_irq_i_set_total = 0;
+    s_event_crossing_overflow = 0;
+    s_event_audit_initialized = 0;
+    s_event_audit_enabled = 0;
+    s_event_audit_path[0] = 0;
+}
+
+void interp_bridge_event_audit_test_stats(unsigned long long *crossings,
+                                          int *sites,
+                                          unsigned long long *irq_i_set) {
+    if (crossings) *crossings = s_event_crossing_total;
+    if (sites) *sites = s_event_crossing_count;
+    if (irq_i_set) *irq_i_set = s_event_crossing_irq_i_set_total;
+}
+#endif
 /* Depth of nested interpreter runs and the run that owns the current paired
  * AOT bounce. A rewritten/non-local return from that AOT root must resume the
  * owning interpreter's guest call chain. */
@@ -449,7 +676,16 @@ int interp_bridge_lle_took_wai(void) {
     return v;
 }
 void interp_bridge_set_master_deadline(uint64_t master_clock) {
+    interp_bridge_set_master_deadline_event(
+        master_clock, INTERP_DEADLINE_EVENT_UNKNOWN);
+}
+
+void interp_bridge_set_master_deadline_event(uint64_t master_clock,
+                                             InterpDeadlineEvent event) {
     s_lle_master_deadline = master_clock;
+    s_lle_master_deadline_event = master_clock
+                                      ? event
+                                      : INTERP_DEADLINE_EVENT_UNKNOWN;
 }
 
 int interp_bridge_lle_master_deadline_reached(const CpuState *cpu) {
@@ -1878,8 +2114,6 @@ static void ram_routine_note(uint32_t target, uint32_t site, uint8_t mx) {
     }
     g_ram_routines[i].hits++;
 }
-
-extern const char *rtl_game_title(void);
 
 /* Find or add a tuple and journal its first sighting. outcome is -1 when the
  * target has not run yet, 0 for a contained bail, and 1 for a clean return. */

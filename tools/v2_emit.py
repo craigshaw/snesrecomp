@@ -250,12 +250,15 @@ def main() -> int:
         tree_digest = _tree_digest((
             REPO / "recompiler" / "v2", pathlib.Path(__file__).resolve(),
             REPO / "tools" / "v2_analyze.py", *native_inputs))
-        # This environment switch changes every emitted AOT body, so it must
-        # participate in the published-output cache key.  Treat any non-empty
-        # value as enabled to match emit_function.py's codegen guard.
+        # These environment switches change emitted AOT bodies, so they must
+        # participate in the published-output cache key. Treat any non-empty
+        # value as enabled to match the codegen guards.
         deny_gate = bool(os.environ.get("SNESRECOMP_EMIT_AOT_DENY_GATE"))
+        event_audit = bool(os.environ.get(
+            "SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT"))
         return hashlib.sha256(
-            f"{tree_digest}\0aot_deny_gate={int(deny_gate)}".encode()
+            (f"{tree_digest}\0aot_deny_gate={int(deny_gate)}"
+             f"\0event_crossing_audit={int(event_audit)}").encode()
         ).hexdigest()
 
     generator_digest = generator_digest_for(analysis_backend)

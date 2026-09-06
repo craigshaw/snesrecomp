@@ -820,6 +820,64 @@ int main(void) {
       CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (interrupt frame popped)",
             g_c.S); }
 
+    /* S15: report only deadlines strictly inside a generated charge interval.
+     * Exact start/end boundaries are already observable block boundaries. */
+    { const char *audit = "event_crossing_bridge_test.json";
+      unsigned long long crossings = 0, irq_i_set = 0;
+      int sites = 0;
+      remove(audit);
+#ifdef _WIN32
+      _putenv_s("SNESRECOMP_EVENT_CROSSING_AUDIT", audit);
+#else
+      setenv("SNESRECOMP_EVENT_CROSSING_AUDIT", audit, 1);
+#endif
+      interp_bridge_event_audit_test_reset();
+      init_cpu();
+      snes_frame_counter = 42;
+      g_c._flag_I = 0;
+      g_c.master_cycles = 80;
+      interp_bridge_set_master_deadline_event(
+          100, INTERP_DEADLINE_EVENT_NMI);
+      interp_bridge_event_audit_charge(&g_c, 0x008000, 40);
+      g_c.master_cycles = 60;
+      interp_bridge_event_audit_charge(&g_c, 0x008001, 40);
+      g_c.master_cycles = 100;
+      interp_bridge_event_audit_charge(&g_c, 0x008002, 40);
+      g_c.master_cycles = 90;
+      g_c._flag_I = 1;
+      interp_bridge_set_master_deadline_event(
+          100, INTERP_DEADLINE_EVENT_IRQ);
+      interp_bridge_event_audit_charge(&g_c, 0x008003, 20);
+      interp_bridge_event_audit_test_stats(&crossings, &sites, &irq_i_set);
+      printf("S15 generated charge crossing audit\n");
+      CHECK(crossings == 2, "crossings=%llu exp 2", crossings);
+      CHECK(sites == 2, "sites=%d exp 2", sites);
+      CHECK(irq_i_set == 1, "irq_i_set=%llu exp 1", irq_i_set);
+      CHECK(interp_bridge_event_audit_write_report(),
+            "event-crossing report write failed");
+      FILE *report = fopen(audit, "rb");
+      CHECK(report != NULL, "event-crossing report missing");
+      if (report) {
+        char body[4096];
+        size_t length = fread(body, 1, sizeof(body) - 1, report);
+        body[length] = 0;
+        fclose(report);
+        CHECK(strstr(body, "snesrecomp event crossing audit v1") != NULL,
+              "report schema missing");
+        CHECK(strstr(body, "\"pc\": \"$008000\"") != NULL,
+              "NMI site missing");
+        CHECK(strstr(body, "\"event\": \"irq\"") != NULL,
+              "IRQ event missing");
+      }
+      interp_bridge_set_master_deadline(0);
+#ifdef _WIN32
+      _putenv_s("SNESRECOMP_EVENT_CROSSING_AUDIT", "");
+#else
+      unsetenv("SNESRECOMP_EVENT_CROSSING_AUDIT");
+#endif
+      interp_bridge_event_audit_test_reset();
+      remove(audit); }
+
     printf("\n==== interp_bridge Phase-1: %d/%d checks passed ====\n", g_check - g_fail, g_check);
     if (g_fail) { printf("RESULT: FAIL (%d)\n", g_fail); return 1; }
     tier2_capture_close();

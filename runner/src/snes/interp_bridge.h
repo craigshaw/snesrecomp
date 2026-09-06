@@ -112,6 +112,19 @@ int interp_bridge_lle_took_wai(void);
  * Combine with snes_next_irq_master() when raster IRQs can occur before the
  * next frame boundary. */
 void interp_bridge_set_master_deadline(uint64_t master_clock);
+void interp_bridge_set_master_deadline_event(uint64_t master_clock,
+                                             InterpDeadlineEvent event);
+
+/* Write the optional generated-code event-crossing report immediately.
+ * SNESRECOMP_EVENT_CROSSING_AUDIT supplies the output path. Audit calls are
+ * emitted only when regeneration uses SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT=1. */
+int interp_bridge_event_audit_write_report(void);
+#ifdef SNESRECOMP_TIER2_TEST
+void interp_bridge_event_audit_test_reset(void);
+void interp_bridge_event_audit_test_stats(unsigned long long *crossings,
+                                          int *sites,
+                                          unsigned long long *irq_i_set);
+#endif
 
 /* True only while a paired AOT bounce is executing inside an auto-quiescent
  * scheduler whose current frame deadline has been reached. Long,

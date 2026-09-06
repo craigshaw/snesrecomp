@@ -692,12 +692,22 @@ RecompReturn interp_tier_dispatch_bank_miss(CpuState *cpu, uint32 addr_pc24,
  * decay it into a value mistaken for a local NLR before the (bounded ≪ 2^30)
  * host stack unwinds. */
 #define RECOMP_RETURN_LLE_UNWIND_BASE 0x40000000
+typedef enum InterpDeadlineEvent {
+  INTERP_DEADLINE_EVENT_UNKNOWN = 0,
+  INTERP_DEADLINE_EVENT_VBLANK = 1,
+  INTERP_DEADLINE_EVENT_NMI = 2,
+  INTERP_DEADLINE_EVENT_IRQ = 3,
+} InterpDeadlineEvent;
 int interp_bridge_in_lle_scheduler(void);
 int interp_bridge_lle_master_deadline_reached(const CpuState *cpu);
 RecompReturn interp_bridge_lle_yield_unwind(CpuState *cpu, uint32 resume_pc24);
 uint32 interp_bridge_lle_resume_pc(void);
 void interp_bridge_set_lle_bounce_exclusions(const uint32 *targets,
                                               size_t count);
+/* Emitted only in explicit event-audit builds. Records a proposed generated
+ * clock charge whose interval may contain the active scheduler deadline. */
+void interp_bridge_event_audit_charge(const CpuState *cpu, uint32 pc24,
+                                      uint64 master_clocks);
 
 /* Focused OAM-overflow observability recorders (debug_server.c).
  * dbg_rts_trace is emitted by the RTS/RTL lowering; dbg_oam_block_trace

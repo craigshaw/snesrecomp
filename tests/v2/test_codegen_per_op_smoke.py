@@ -1,5 +1,7 @@
 """Per-IR-op smoke tests for v2 codegen. Assert the emitted C contains
 the expected substrings for each op kind."""
+import os
+
 from _helpers import make_lorom_bank0  # noqa: E402
 
 from v2.codegen import emit_op  # noqa: E402
@@ -361,8 +363,16 @@ def test_return_short_emits_return_stmt():
 
 
 def test_blockmove_mvn_increments():
-    op = BlockMove(direction='mvn', src_bank=0x7E, dst_bank=0x7F)
-    s = _joined(emit_op(op, source_pc24=0x808E7A))
+    name = 'SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT'
+    previous = os.environ.get(name)
+    os.environ[name] = '1'
+    try:
+        op = BlockMove(direction='mvn', src_bank=0x7E, dst_bank=0x7F)
+        s = _joined(emit_op(op, source_pc24=0x808E7A))
+    finally:
+        os.environ.pop(name, None)
+        if previous is not None:
+            os.environ[name] = previous
     assert "cpu->X = (uint16)(cpu->X +1)" in s
     assert "cpu->Y = (uint16)(cpu->Y +1)" in s
     assert "do {" in s
@@ -371,6 +381,7 @@ def test_blockmove_mvn_increments():
     assert "cpu->master_cycles += 7 * (g_memsel ? 6 : 8)" in s
     assert "interp_bridge_lle_master_deadline_reached(cpu)" in s
     assert "interp_bridge_lle_yield_unwind(cpu, 0x808e7au)" in s
+    assert "interp_bridge_event_audit_charge(cpu, 0x808e7au" in s
     assert "cpu->X &= 0x00FFu" in s
 
 

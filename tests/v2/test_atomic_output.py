@@ -1,5 +1,6 @@
 """Transactional generated-output publication tests."""
 
+import os
 import pathlib
 import subprocess
 import sys
@@ -109,3 +110,43 @@ def test_failed_regen_leaves_previous_generation_untouched():
         result, _ = _run_minimal_regen(root, 0x00)  # BRK -> stub lint
         assert result.returncode != 0
         assert live.read_text(encoding='utf-8') == 'known-good\n'
+
+
+def test_event_audit_mode_invalidates_published_output_cache():
+    with tempfile.TemporaryDirectory() as raw:
+        root = pathlib.Path(raw)
+        rom = bytearray([0xFF] * 0x8000)
+        rom[0] = 0x60  # RTS
+        rom_path = root / 'game.sfc'
+        rom_path.write_bytes(rom)
+        cfg_dir = root / 'cfg'
+        cfg_dir.mkdir()
+        (cfg_dir / 'bank00.cfg').write_text(
+            'bank = 00\nfunc Entry 8000 end:8001\n', encoding='utf-8')
+        out_dir = root / 'gen'
+        command = [
+            sys.executable, str(REPO / 'tools' / 'v2_emit.py'),
+            '--rom', str(rom_path), '--cfg-dir', str(cfg_dir),
+            '--out-dir', str(out_dir), '--cfg-roots',
+            '--analysis-backend', 'python',
+        ]
+
+        normal_env = dict(os.environ)
+        normal_env.pop('SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT', None)
+        normal = subprocess.run(
+            command, capture_output=True, text=True, env=normal_env)
+        assert normal.returncode == 0, normal.stdout + normal.stderr
+        source_path = out_dir / 'bank00_v2.c'
+        assert 'interp_bridge_event_audit_charge' not in source_path.read_text()
+
+        audit_env = dict(normal_env)
+        audit_env['SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT'] = '1'
+        audit = subprocess.run(
+            command, capture_output=True, text=True, env=audit_env)
+        assert audit.returncode == 0, audit.stdout + audit.stderr
+        assert 'interp_bridge_event_audit_charge' in source_path.read_text()
+
+        restored = subprocess.run(
+            command, capture_output=True, text=True, env=normal_env)
+        assert restored.returncode == 0, restored.stdout + restored.stderr
+        assert 'interp_bridge_event_audit_charge' not in source_path.read_text()

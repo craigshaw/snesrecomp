@@ -1,6 +1,7 @@
 """Axis-2 step C: the v2 emitter charges each block's static 65816 CPU
 cycles as a per-block constant (recompiler/snes_cycles.py via
 emit_function._block_cycle_const). Guards the cost-model -> emitter wiring."""
+import os
 import re
 
 from _helpers import make_lorom_bank0  # noqa: E402
@@ -110,3 +111,26 @@ def test_master_cycles_region_weighted_static_charge():
     # And the weighting holds term-by-term (slow region => master == 8*cpu).
     for c, m in zip(cyc, mas):
         assert int(m) == int(c) * 8, f'master {m} != 8*{c}'
+
+
+def test_event_crossing_audit_is_regeneration_opt_in():
+    # A normal regeneration has no audit calls. An explicit audit regeneration
+    # observes the static block charge and the runtime D.l penalty separately.
+    rom = make_lorom_bank0({0x8000: bytes([0xA5, 0x00, 0x60])})
+    name = 'SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT'
+    previous = os.environ.pop(name, None)
+    try:
+        normal = emit_function(rom, bank=0, start=0x8000,
+                               entry_m=1, entry_x=1)
+        assert "interp_bridge_event_audit_charge" not in normal
+
+        os.environ[name] = '1'
+        audited = emit_function(rom, bank=0, start=0x8000,
+                                entry_m=1, entry_x=1)
+        call = "interp_bridge_event_audit_charge(cpu, 0x008000u,"
+        assert audited.count(call) == 2, audited
+        assert audited.index(call) < audited.index("cpu->master_cycles += 72;")
+    finally:
+        os.environ.pop(name, None)
+        if previous is not None:
+            os.environ[name] = previous

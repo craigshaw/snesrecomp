@@ -23,6 +23,7 @@ into a per-function emit driver (replacing the v1 emit_function) and
 run the full SMW regen against it.
 """
 
+import os
 import sys
 import pathlib
 
@@ -2546,6 +2547,11 @@ def _emit_blockmove(op: BlockMove) -> List[str]:
     fast_speed = region_speed(_CURRENT_SOURCE_PC24, 1)
     speed_expr = (str(slow_speed) if slow_speed == fast_speed else
                   f"(g_memsel ? {fast_speed} : {slow_speed})")
+    audit_line = (
+        f"      interp_bridge_event_audit_charge(cpu, {trace_pc}, "
+        f"7 * {speed_expr});"
+        if os.environ.get('SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT') else ""
+    )
     return [
         "{",
         f"  uint8 _src_b = {op.src_bank:#04x};",
@@ -2569,6 +2575,7 @@ def _emit_blockmove(op: BlockMove) -> List[str]:
         "      if (interp_bridge_lle_master_deadline_reached(cpu)) {",
         f"        return interp_bridge_lle_yield_unwind(cpu, {trace_pc});",
         "      }",
+        audit_line,
         "      cpu->cycles += 7;",
         f"      cpu->master_cycles += 7 * {speed_expr};",
         "    }",
