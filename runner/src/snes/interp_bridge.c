@@ -689,10 +689,11 @@ void interp_bridge_set_master_deadline_event(uint64_t master_clock,
 }
 
 int interp_bridge_lle_master_deadline_reached(const CpuState *cpu) {
-    const int reached =
-        cpu && s_lle_sched_depth > 0 && s_interp_bounce_owner_depth > 0 &&
-        s_lle_master_deadline != 0 &&
-        cpu->master_cycles >= s_lle_master_deadline;
+    const int reached = cpu && s_lle_sched_depth > 0 &&
+        s_interp_bounce_owner_depth > 0 &&
+        ((g_snes && g_snes->nmiPending) ||
+         (s_lle_master_deadline != 0 &&
+          cpu->master_cycles >= s_lle_master_deadline));
     if (reached)
         s_lle_next_unwind_is_deadline = 1;
     return reached;
@@ -1046,11 +1047,18 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         debug_on_block_enter(pc_before, in.a, in.x, in.y);
         sync_cpu_to_interp(cpu, &in);
 #endif
-        /* IRQs are sampled between instructions.  An auto-quiescent whole-
+        /* Interrupts are sampled between instructions. An auto-quiescent whole-
          * program run must return to its owning scheduler as soon as either
-         * the CPU H/V comparator or a coprocessor asserts IRQ; otherwise a
+         * delayed-enable NMI, the CPU H/V comparator, or a coprocessor asserts
+         * an interrupt; otherwise a
          * perfectly live hardware-poll loop can monopolize the bridge and
          * starve the handler forever. */
+        if (auto_quiescent && steps && g_snes && g_snes->nmiPending) {
+            s_lle_resume_pc24=pc_before;
+            sync_interp_to_cpu(&in,cpu);
+            bridge_apu_flush(cpu);
+            return 1;
+        }
         if (auto_quiescent && steps && !in.i && g_snes &&
             (g_snes->inIrq ||
              (g_snes->cart && g_snes->cart->superfx &&

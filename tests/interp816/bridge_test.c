@@ -24,6 +24,7 @@
 #include "interp_bridge.h"   /* -> cpu_state.h (types, inline frame helpers) */
 #include "tier2_capture.h"
 #include "snes.h"            /* Snes storage for the bridge's APU clock hook */
+#include "snes_regs.h"
 #include "sa1.h"
 
 CpuState g_cpu;
@@ -38,6 +39,7 @@ static int      g_aot_double_rewrite;
 static int      g_aot_crosses_interp_owner;
 static int      g_aot_skips_interp_owner;
 static int      g_aot_deadline_unwind;
+static int      g_aot_nmi_unwind;
 static int      g_owner_target_result;
 static int      g_aot_tail_chain_probe;
 static int      g_aot_skips_root;
@@ -100,7 +102,19 @@ uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {
     (void)cpu; return RAM[(((uint32)bank << 16) | addr) & 0xFFFFFF];
 }
 void cpu_write8(CpuState *cpu, uint8 bank, uint16 addr, uint8 v) {
-    (void)cpu; RAM[(((uint32)bank << 16) | addr) & 0xFFFFFF] = v;
+    (void)cpu;
+    uint32 key = (((uint32)bank << 16) | addr) & 0xFFFFFF;
+    RAM[key] = v;
+    if (key == 0x004200) {
+        int request = snes_nmitimen_requests_nmi(
+            g_snes->nmiEnabled, g_snes->inVblank, g_snes->inNmi,
+            g_snes->nmiRaisedThisVblank, v);
+        g_snes->nmiEnabled = (v & 0x80) != 0;
+        if (request) {
+            g_snes->nmiPending = true;
+            g_snes->nmiRaisedThisVblank = true;
+        }
+    }
 }
 uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 addr) {
     uint8 lo = cpu_read8(cpu, bank, addr);
@@ -177,6 +191,15 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
     if (g_aot_deadline_unwind && (pc24 & 0xFFFFFF) == FAKE_AOT) {
         g_aot_called++;
         cpu->master_cycles = 200;
+        if (interp_bridge_lle_master_deadline_reached(cpu))
+            return interp_bridge_lle_yield_unwind(cpu, 0x008100);
+        cpu->A = 0x0100;
+        cpu->S = (uint16)(cpu->S + frame_size);
+        return RECOMP_RETURN_NORMAL;
+    }
+    if (g_aot_nmi_unwind && (pc24 & 0xFFFFFF) == FAKE_AOT) {
+        g_aot_called++;
+        g_snes->nmiPending = true;
         if (interp_bridge_lle_master_deadline_reached(cpu))
             return interp_bridge_lle_yield_unwind(cpu, 0x008100);
         cpu->A = 0x0100;
@@ -317,6 +340,11 @@ static void post_rti_probe(CpuState *cpu, uint32_t pc24) {
 
 static void init_cpu(void) {
     memset(&g_c, 0, sizeof g_c);
+    g_test_snes.nmiEnabled = false;
+    g_test_snes.inVblank = false;
+    g_test_snes.inNmi = false;
+    g_test_snes.nmiPending = false;
+    g_test_snes.nmiRaisedThisVblank = false;
     g_c.S = 0x01FF; g_c.emulation = 1; g_c.m_flag = 1; g_c.x_flag = 1;
     g_c._flag_I = 1; g_c.ram = RAM; cpu_mirrors_to_p(&g_c);
 }
@@ -646,6 +674,50 @@ int main(void) {
             (unsigned)interp_bridge_lle_resume_pc());
       interp_bridge_set_master_deadline(0);
       g_aot_deadline_unwind = 0; }
+
+    /* S8d: an interpreted NMITIMEN write that enables NMI while RDNMI is
+     * latched returns at the following instruction boundary. */
+    { memset(RAM, 0, MEMSZ); init_cpu();
+      g_test_snes.inNmi = true;
+      g_test_snes.inVblank = true;
+      uint8_t scheduler[] = {
+          0xA9,0x81,                           /* LDA #$81 */
+          0x8D,0x00,0x42,                      /* STA $4200 */
+          0xA9,0x5A                            /* must not execute */
+      };
+      load(0x8000, scheduler, sizeof scheduler);
+      int rc = interp_bridge_run_until_quiescent(&g_c, 0x008000);
+      printf("S8d delayed-enable NMI yields interpreted execution\n");
+      CHECK(rc == 1, "rc=%d exp 1", rc);
+      CHECK((g_c.A & 0xFF) == 0x81,
+            "A.lo=%02X exp 81 (post-write instruction not executed)",
+            g_c.A & 0xFF);
+      CHECK(g_test_snes.nmiPending, "NMI request was not retained");
+      CHECK(interp_bridge_lle_resume_pc() == 0x008005,
+            "resume=$%06X exp $008005",
+            (unsigned)interp_bridge_lle_resume_pc()); }
+
+    /* S8e: the same asynchronous request unwinds a paired AOT bounce even
+     * when the scheduler's clock deadline has not expired. */
+    { memset(RAM, 0, MEMSZ); init_cpu(); g_aot_called = 0;
+      g_aot_nmi_unwind = 1;
+      uint8_t scheduler[] = {
+          0x22,0x00,0x81,0x00,                 /* JSL fake compiled root */
+          0xA9,0x5A                            /* must not execute */
+      };
+      load(0x8000, scheduler, sizeof scheduler);
+      int rc = interp_bridge_run_until_quiescent(&g_c, 0x008000);
+      printf("S8e delayed-enable NMI unwinds compiled execution\n");
+      CHECK(rc == 1, "rc=%d exp 1", rc);
+      CHECK(g_aot_called == 1, "aot_called=%d exp 1", g_aot_called);
+      CHECK((g_c.A & 0xFF) == 0x00,
+            "A.lo=%02X exp 00 (continuation not executed)", g_c.A & 0xFF);
+      CHECK(g_c.S == 0x01FC,
+            "S=%04X exp 01FC (compiled JSL frame retained)", g_c.S);
+      CHECK(interp_bridge_lle_resume_pc() == 0x008100,
+            "resume=$%06X exp $008100",
+            (unsigned)interp_bridge_lle_resume_pc());
+      g_aot_nmi_unwind = 0; }
 
     /* S9: the same rewrite below the paired AOT root belongs to a compiled
      * ancestor, not directly to the scheduler interpreter.  Finish that

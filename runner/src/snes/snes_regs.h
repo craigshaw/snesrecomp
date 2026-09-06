@@ -11,6 +11,16 @@ static inline unsigned char snes_rdnmi_merge_open_bus(
   return (unsigned char)((driven & 0x8f) | (open_bus & 0x70));
 }
 
+/* One 0->1 transition of NMITIMEN bit 7 may assert the CPU NMI input during
+ * VBlank. This is separate from the RDNMI read-clear operation. */
+static inline int snes_nmitimen_requests_nmi(
+    int was_enabled, int in_vblank, int rdnmi_latched,
+    int already_raised,
+    unsigned char value) {
+  return !was_enabled && in_vblank && rdnmi_latched && !already_raised &&
+         (value & 0x80) != 0;
+}
+
 typedef enum SnesRegs {
   INIDISP = 0x2100,
   OBSEL = 0x2101,

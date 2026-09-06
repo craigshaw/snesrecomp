@@ -127,9 +127,9 @@ void interp_bridge_event_audit_test_stats(unsigned long long *crossings,
 #endif
 
 /* True only while a paired AOT bounce is executing inside an auto-quiescent
- * scheduler whose current frame deadline has been reached. Long,
- * architecturally interruptible instructions use this at their legal byte
- * boundaries before unwinding to the owning interpreter. */
+ * scheduler and either its deadline has been reached or a delayed-enable NMI
+ * is pending. Long, architecturally interruptible instructions use this at
+ * their legal byte boundaries before unwinding to the owning interpreter. */
 int interp_bridge_lle_master_deadline_reached(const CpuState *cpu);
 
 /* Execute an architectural interrupt handler through its terminal RTI. The

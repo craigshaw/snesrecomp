@@ -165,6 +165,8 @@ void snes_reset(Snes* snes, bool hard) {
   snes->hPos = 0;
   snes->vPos = 0;
   snes->apuCatchupCycles = 0.0;
+  snes->nmiPending = false;
+  snes->nmiRaisedThisVblank = false;
   snes->hIrqEnabled = false;
   snes->vIrqEnabled = false;
   snes->nmiEnabled = false;
@@ -617,12 +619,31 @@ uint8_t snes_readReg(Snes* snes, uint16_t adr) {
   }
 }
 
+void snes_latch_nmi(Snes *snes) {
+  if (!snes)
+    return;
+  snes->inNmi = true;
+  snes->nmiRaisedThisVblank = snes->nmiEnabled;
+  if (snes->nmiEnabled)
+    snes->nmiPending = true;
+}
+
+bool snes_take_nmi(Snes *snes) {
+  if (!snes || !snes->nmiPending)
+    return false;
+  snes->nmiPending = false;
+  return true;
+}
+
 void snes_writeReg(Snes* snes, uint16_t adr, uint8_t val) {
   switch(adr) {
     case 0x4016:
       joypad_write_strobe(snes, val);
       break;
     case 0x4200: {
+      bool request_nmi = snes_nmitimen_requests_nmi(
+          snes->nmiEnabled, snes->inVblank, snes->inNmi,
+          snes->nmiRaisedThisVblank, val);
       snes->autoJoyRead = val & 0x1;
       if(!snes->autoJoyRead) snes->autoJoyTimer = 0;
       snes->hIrqEnabled = val & 0x10;
@@ -631,7 +652,10 @@ void snes_writeReg(Snes* snes, uint16_t adr, uint8_t val) {
       if(!snes->hIrqEnabled && !snes->vIrqEnabled) {
         snes->inIrq = false;
       }
-      // TODO: enabling nmi during vblank with inNmi still set generates nmi
+      if (request_nmi) {
+        snes->nmiPending = true;
+        snes->nmiRaisedThisVblank = true;
+      }
       //   enabling virq (and not h) on the vPos that vTimer is at generates irq (?)
       break;
     }

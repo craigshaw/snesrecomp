@@ -34,6 +34,10 @@ struct Snes {
   uint16_t joypad1Latched;
   uint16_t joypad2Latched;
   bool disableRender;
+  /* Transient handoff from the hardware model to an event-driven host. The
+   * host consumes this before its next stable frame boundary. */
+  bool nmiPending;
+  bool nmiRaisedThisVblank;
 
   // ram data port ($2180-$2183)
   uint32_t ramAdr;
@@ -111,6 +115,10 @@ uint8_t snes_read(Snes* snes, uint32_t adr);
 void snes_write(Snes* snes, uint32_t adr, uint8_t val);
 uint8_t snes_readReg(Snes* snes, uint16_t adr);
 void snes_writeReg(Snes* snes, uint16_t adr, uint8_t val);
+/* Latch a VBlank NMI edge and consume the resulting CPU request. Hosts that
+ * own frame timing use these instead of writing inNmi directly. */
+void snes_latch_nmi(Snes *snes);
+bool snes_take_nmi(Snes *snes);
 uint16_t SwapInputBits(uint16_t x);
 
 
