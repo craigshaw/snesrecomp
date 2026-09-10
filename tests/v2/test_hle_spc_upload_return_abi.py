@@ -26,6 +26,11 @@ def test_hle_spc_upload_emits_rts_frame_pop_before_normal_return():
     assert 'dbg_rts_trace(cpu, 0x008059u, _entry_s, _ret_s, _rpc24, (uint8)_hrv);' in src, src
     assert 'return RECOMP_RETURN_NORMAL;  /* HLE RTS host return */' in src, src
     assert 'cpu_dispatch_pc_from(cpu, _rpc24, (uint16)(_entry_s + 2u), 0x008059u)' in src, src
+    assert src.index(
+        'interp_bridge_return_targets_owner(_ret_s, cpu->S)') < src.index(
+        'cpu_resolve_ancestor_skip(_ret_s)'), (
+            'the active interpreter must own a mixed-tier HLE continuation '
+            'before generated ancestor resolution')
 
     assert src.index('HLE SPC upload RTS pop hardware return frame') < src.index(
         'return RECOMP_RETURN_NORMAL;  /* HLE RTS host return */')

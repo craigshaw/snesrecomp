@@ -2390,17 +2390,20 @@ def _emit_return(op: Return) -> List[str]:
         # Intentionally not gated by cpu_dispatch_has_entry(): a popped PC can
         # be both a valid continuation entry and a return-to-ancestor target.
         "  if (_ret_s != _entry_s) {",
+        # The nearest skipped ancestor can be a caller still running inside
+        # the active interpreter rather than another generated function. Hand
+        # the popped continuation back to that owner through the existing
+        # arbitrary-depth LLE unwind sentinel. Test interpreter ownership
+        # before the generated-ancestor table: a mixed-tier continuation can
+        # share the same guest-stack watermark as a generated ancestor, but
+        # the active bridge owns the architectural continuation.
+        "    if (interp_bridge_return_targets_owner(_ret_s, cpu->S)) {",
+        "      cpu_trace_mark_nlr_exit(BD_EXIT_KIND_TRAMPOLINE);",
+        f"      return interp_bridge_lle_yield_unwind(cpu, _rpc24);  /* {label_inner} return-to-interpreter-owner */ }}",
         "    int _anc_skip = cpu_resolve_ancestor_skip(_ret_s);",
         "    if (_anc_skip >= 0) {",
         "      cpu_trace_mark_nlr_exit(BD_EXIT_KIND_TRAMPOLINE);",
         f"      return (RecompReturn)_anc_skip;  /* {label_inner} return-to-ancestor */ }}",
-        # The nearest skipped ancestor can be a caller still running inside
-        # the active interpreter rather than another generated function. Hand
-        # the popped continuation back to that owner through the existing
-        # arbitrary-depth LLE unwind sentinel.
-        "    if (interp_bridge_return_targets_owner(_ret_s, cpu->S)) {",
-        "      cpu_trace_mark_nlr_exit(BD_EXIT_KIND_TRAMPOLINE);",
-        f"      return interp_bridge_lle_yield_unwind(cpu, _rpc24);  /* {label_inner} return-to-interpreter-owner */ }}",
         # A skipped ancestor may be part of the active interpreter rather than
         # g_recomp_stack. Return the real popped continuation to that owning
         # bridge instead of creating a new dispatch root and then resuming code
