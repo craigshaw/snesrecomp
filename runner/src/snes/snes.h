@@ -125,6 +125,10 @@ void snes_advance_master_cycles(Snes *snes, uint32_t clocks);
 void snes_sync_master_clock(Snes *snes, uint64_t master_clock);
 void snes_set_master_clock_charge_hook(SnesMasterClockChargeHook hook);
 void snes_set_wram_write_log_hook(SnesWramWriteLogHook hook);
+/* Set while a frame-model host drives per-line HDMA itself. The beam
+ * simulator leaves its independent HDMA engine idle until the host clears
+ * the flag. Hosts that do not opt in retain the existing behaviour. */
+extern int g_host_owns_hdma;
 /* Master clock at which the enabled H/V IRQ comparator next matches, starting
  * from the live beam position (`now` is that position's master clock, normally
  * g_cpu.master_cycles). Returns false when no comparator is armed.

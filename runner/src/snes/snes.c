@@ -39,6 +39,8 @@ static void snes_trace_direct_wram_write(uint32_t off, uint8_t old, uint8_t val)
 
 static SnesMasterClockChargeHook s_master_clock_charge_hook;
 static SnesWramWriteLogHook s_wram_write_log_hook;
+/* A frame-model host may drive per-line HDMA itself while rendering. */
+int g_host_owns_hdma = 0;
 
 void snes_set_master_clock_charge_hook(SnesMasterClockChargeHook hook) {
   s_master_clock_charge_hook = hook;
@@ -383,14 +385,14 @@ static uint32_t snes_advance_beam(Snes *snes, uint32_t clocks, bool check_irq) {
     h += span;
     clocks -= span;
     consumed += span;
-    if (check_irq && v < 225u && h == 1024u)
+    if (check_irq && v < 225u && h == 1024u && !g_host_owns_hdma)
       dma_doHdma(snes->dma);
     if (h >= 1364u) {
       h = 0;
       v++;
       if (v >= 262u) {
         v = 0;
-        if (check_irq)
+        if (check_irq && !g_host_owns_hdma)
           dma_initHdma(snes->dma);
         /* End of field. Armed the whole way round and nothing latched means
          * the beam swept past the target without firing — a LOST interrupt,
