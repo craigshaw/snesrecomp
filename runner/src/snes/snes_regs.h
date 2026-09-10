@@ -2,6 +2,15 @@
 #define SNES_SNES_REGS_H_
 #pragma once
 
+/* RDNMI ($4210) drives bit 7 and the four CPU-version bits. Bits 4-6 are
+ * undriven and retain the CPU data-bus value. Keep this tiny helper beside the
+ * register definition so both the runtime and ROM-free regression tests use
+ * the same mask. */
+static inline unsigned char snes_rdnmi_merge_open_bus(
+    unsigned char driven, unsigned char open_bus) {
+  return (unsigned char)((driven & 0x8f) | (open_bus & 0x70));
+}
+
 typedef enum SnesRegs {
   INIDISP = 0x2100,
   OBSEL = 0x2101,
