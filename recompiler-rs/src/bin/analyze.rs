@@ -521,7 +521,12 @@ fn summarize(
             }
             continue;
         }
-        let direct = if insn.mnem == "JSL" {
+        let direct = if let Some(target) = insn.long_call_trampoline_target {
+            Some((
+                "direct_call",
+                VariantKey::new(target, insn.m_flag, insn.x_flag),
+            ))
+        } else if insn.mnem == "JSL" {
             Some((
                 "direct_call",
                 VariantKey::new(insn.operand, insn.m_flag, insn.x_flag),
@@ -534,6 +539,11 @@ fn summarize(
                     insn.m_flag,
                     insn.x_flag,
                 ),
+            ))
+        } else if insn.mnem == "JMP" && insn.length == 4 && insn.return_trampoline {
+            Some((
+                "direct_call",
+                VariantKey::new(insn.operand, insn.m_flag, insn.x_flag),
             ))
         } else if insn.mnem == "JMP" && insn.length == 4 {
             Some((

@@ -155,6 +155,15 @@ pub struct Insn {
     /// Direct JSR whose callee consumes the call frame and never resumes the
     /// lexical fall-through.
     pub terminal_jsr: bool,
+    /// Direct JML reached through PHK;PER. It behaves as a long call and
+    /// resumes at `return_trampoline_pc` after the target's RTL.
+    pub return_trampoline: bool,
+    pub return_trampoline_pc: Option<u32>,
+    /// Direct JSR preceded by PHK whose local target is a one-JML veneer.
+    /// The value is the veneer JML's real 24-bit target.
+    pub long_call_trampoline_target: Option<u32>,
+    /// Explicit PHK/PER bookkeeping folded into a synthesized long call.
+    pub call_trampoline_setup: bool,
     /// JSR (abs,X) through a pointer held in WRAM. The target is resolved by
     /// the runtime dispatcher, but the call's fall-through remains reachable.
     pub dispatch_runtime: bool,
@@ -195,6 +204,10 @@ impl Insn {
             dispatch_consumed_stack_bytes: 0,
             dispatch_stack_pointer: false,
             terminal_jsr: false,
+            return_trampoline: false,
+            return_trampoline_pc: None,
+            long_call_trampoline_target: None,
+            call_trampoline_setup: false,
             dispatch_runtime: false,
             dispatch_local_goto: false,
             const_z_fold_unconditional: false,

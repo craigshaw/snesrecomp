@@ -181,6 +181,21 @@ impl FunctionDecodeGraph {
         &self.insns_vec
     }
 
+    fn mark_call_trampoline_setup(&mut self, pc24s: &[u32]) -> bool {
+        if pc24s
+            .iter()
+            .any(|pc| !self.insns_vec.iter().any(|di| di.key.pc == *pc))
+        {
+            return false;
+        }
+        for di in &mut self.insns_vec {
+            if pc24s.contains(&di.key.pc) {
+                di.insn.call_trampoline_setup = true;
+            }
+        }
+        true
+    }
+
     pub fn len(&self) -> usize {
         self.insns_vec.len()
     }
@@ -880,6 +895,63 @@ fn pea_ptrcall_return_pc(
     (pea_operand + 1) & 0xFFFF
 }
 
+fn mapped_byte(
+    rom: &[u8],
+    mapping: RomMapping,
+    bank: u32,
+    pc: u32,
+    reloc: &[RelocRegion],
+) -> Option<u8> {
+    try_rom_offset(mapping, bank, pc & 0xFFFF, reloc).and_then(|off| rom.get(off).copied())
+}
+
+fn return_trampoline_pc(
+    rom: &[u8],
+    mapping: RomMapping,
+    bank: u32,
+    jml_pc: u32,
+    reloc: &[RelocRegion],
+) -> Option<u32> {
+    let phk_pc = jml_pc.wrapping_sub(4) & 0xFFFF;
+    let per_pc = jml_pc.wrapping_sub(3) & 0xFFFF;
+    if mapped_byte(rom, mapping, bank, phk_pc, reloc)? != 0x4B
+        || mapped_byte(rom, mapping, bank, per_pc, reloc)? != 0x62
+    {
+        return None;
+    }
+    let lo = mapped_byte(rom, mapping, bank, per_pc + 1, reloc)? as u16;
+    let hi = mapped_byte(rom, mapping, bank, per_pc + 2, reloc)? as u16;
+    let rel = (lo | (hi << 8)) as i16 as i32;
+    Some((((per_pc + 3) as i32 + rel + 1) as u32) & 0xFFFF)
+}
+
+fn long_jsr_trampoline_target(
+    rom: &[u8],
+    mapping: RomMapping,
+    bank: u32,
+    target: u32,
+    reloc: &[RelocRegion],
+) -> Option<u32> {
+    let first = mapped_byte(rom, mapping, bank, target, reloc)?;
+    if first == 0x5C {
+        let lo = mapped_byte(rom, mapping, bank, target + 1, reloc)? as u32;
+        let hi = mapped_byte(rom, mapping, bank, target + 2, reloc)? as u32;
+        let pb = mapped_byte(rom, mapping, bank, target + 3, reloc)? as u32;
+        return Some(lo | (hi << 8) | (pb << 16));
+    }
+    if first != 0xF4 || mapped_byte(rom, mapping, bank, target + 3, reloc)? != 0x5C {
+        return None;
+    }
+    let ret_lo = mapped_byte(rom, mapping, bank, target + 1, reloc)? as u32;
+    let ret_hi = mapped_byte(rom, mapping, bank, target + 2, reloc)? as u32;
+    let target_bank = mapped_byte(rom, mapping, bank, target + 6, reloc)? as u32;
+    let return_minus_one = ret_lo | (ret_hi << 8);
+    if mapped_byte(rom, mapping, target_bank, return_minus_one + 1, reloc)? != 0x6B {
+        return None;
+    }
+    Some(addr24(bank, target))
+}
+
 /// Compute (DecodeKey, edge_kind) successor tuples for one decoded insn. Port of
 /// `_labeled_successors`.
 fn labeled_successors(
@@ -916,7 +988,8 @@ fn labeled_successors(
             ),
         ];
     }
-    if mnem == "JMP" {
+    let is_return_trampoline = mnem == "JMP" && insn.mode == Mode::Long && insn.return_trampoline;
+    if mnem == "JMP" && !is_return_trampoline {
         if insn.mode == Mode::Abs {
             return vec![(
                 DecodeKey::with_stack(addr24(bank, insn.operand), post_m, post_x, post_p_stack),
@@ -933,20 +1006,27 @@ fn labeled_successors(
         return vec![];
     }
 
-    if mnem == "JSR" || mnem == "JSL" {
+    if mnem == "JSR" || mnem == "JSL" || is_return_trampoline {
         if insn.terminal_jsr {
             return vec![];
         }
         let (mut ret_m, mut ret_x) = (post_m, post_x);
         let target_pc24: Option<u32> =
             if mnem == "JSR" && insn.length == 3 && insn.mode != Mode::IndirX {
-                Some(addr24(bank, insn.operand & 0xFFFF))
+                insn.long_call_trampoline_target
+                    .or(Some(addr24(bank, insn.operand & 0xFFFF)))
             } else if mnem == "JSL" {
+                Some(insn.operand & 0xFFFFFF)
+            } else if is_return_trampoline {
                 Some(insn.operand & 0xFFFFFF)
             } else {
                 None
             };
-        let mut eff_next_pc = next_pc;
+        let mut eff_next_pc = if is_return_trampoline {
+            insn.return_trampoline_pc.unwrap_or(next_pc) & 0xFFFF
+        } else {
+            next_pc
+        };
         let skip_map = env.callee_inline_skip.or(env.global_inline_skip);
         if let (Some(map), Some(tp)) = (skip_map, target_pc24) {
             let mut skip = map.get(&tp).copied();
@@ -1128,6 +1208,35 @@ pub fn decode_function(
             .unwrap_or_else(|| panic!("v2 decoder: unknown opcode at ${bank:02X}:{pc:04X}"));
         insn.m_flag = key.m;
         insn.x_flag = key.x;
+        if insn.mnem == "JMP"
+            && insn.mode == Mode::Long
+            && pred_pc == (pc.wrapping_sub(3) & 0xFFFF) as i64
+        {
+            if let Some(return_pc) = return_trampoline_pc(rom, mapping, bank, pc, reloc) {
+                let setup = [
+                    addr24(bank, pc.wrapping_sub(4) & 0xFFFF),
+                    addr24(bank, pc.wrapping_sub(3) & 0xFFFF),
+                ];
+                if graph.mark_call_trampoline_setup(&setup) {
+                    insn.return_trampoline = true;
+                    insn.return_trampoline_pc = Some(return_pc);
+                }
+            }
+        } else if insn.mnem == "JSR"
+            && insn.mode != Mode::IndirX
+            && insn.length == 3
+            && pred_pc == (pc.wrapping_sub(1) & 0xFFFF) as i64
+            && mapped_byte(rom, mapping, bank, pc.wrapping_sub(1), reloc) == Some(0x4B)
+        {
+            if let Some(target) =
+                long_jsr_trampoline_target(rom, mapping, bank, insn.operand & 0xFFFF, reloc)
+            {
+                let setup = [addr24(bank, pc.wrapping_sub(1) & 0xFFFF)];
+                if graph.mark_call_trampoline_setup(&setup) {
+                    insn.long_call_trampoline_target = Some(target);
+                }
+            }
+        }
         if env
             .terminal_jsr_sites
             .is_some_and(|sites| sites.contains(&(insn.addr & 0xFFFFFF)))
@@ -2129,7 +2238,11 @@ fn direct_tail_exit_keys(graph: &FunctionDecodeGraph, di: &DecodedInsn) -> Vec<(
     if !outside.is_empty() {
         return outside;
     }
-    if ins.mnem == "JMP" && ins.length == 4 && ins.dispatch_entries.is_none() {
+    if ins.mnem == "JMP"
+        && ins.length == 4
+        && ins.dispatch_entries.is_none()
+        && !ins.return_trampoline
+    {
         return vec![(ins.operand & 0xFFFFFF, ins.m_flag & 1, ins.x_flag & 1)];
     }
     Vec::new()
@@ -2230,6 +2343,9 @@ fn entry_stack_restore_tcs_keys(graph: &FunctionDecodeGraph) -> HashSet<DecodeKe
 /// `None` is an indeterminate height after TCS/TXS.
 fn return_stack_delta_states(graph: &FunctionDecodeGraph) -> HashMap<u32, HashSet<Option<i32>>> {
     fn local_delta(ins: &Insn) -> Option<i32> {
+        if ins.call_trampoline_setup {
+            return Some(0);
+        }
         if ins.dispatch_consumed_stack_bytes != 0 {
             return Some(-(ins.dispatch_consumed_stack_bytes as i32));
         }
@@ -3516,6 +3632,93 @@ mod tests {
         let rts = g.get(&k(0x8002)).unwrap();
         assert_eq!(rts.insn.mnem, "RTS");
         assert!(rts.successors.is_empty());
+    }
+
+    #[test]
+    fn phk_per_jml_is_a_returning_long_call() {
+        let mut rom = vec![0xEA; 0x10000];
+        rom[..13].copy_from_slice(&[
+            0x08, // PHP
+            0xE2, 0x30, // SEP #$30
+            0x4B, // PHK
+            0x62, 0x03, 0x00, // PER $800A (return-1)
+            0x5C, 0x00, 0x90, 0x01, // JML $01:9000
+            0x28, // PLP
+            0x60, // RTS
+        ]);
+        rom[0x9000] = 0x6B; // bank 1:$9000 -> LoROM offset $9000
+        let exits = HashMap::from([((0x019000, 1, 1), (1, 1))]);
+        let env = DecodeEnv {
+            callee_exit_mx: Some(&exits),
+            stop_on_unknown_callee_exit: true,
+            ..DecodeEnv::default()
+        };
+        let graph = decode_function(&rom, 0, 0x8000, 0, 1, Some(0x800D), &env);
+        let jml = graph
+            .insns()
+            .iter()
+            .find(|di| di.insn.addr == 0x008007)
+            .unwrap();
+        assert!(jml.insn.return_trampoline);
+        assert_eq!(jml.insn.return_trampoline_pc, Some(0x800B));
+        assert_eq!(
+            analyze_function_exit_mx(&graph, Some(&exits)),
+            (Some(0), Some(1))
+        );
+        assert!(graph.unknown_callee_exit_sites.is_empty());
+    }
+
+    #[test]
+    fn phk_jsr_jml_veneer_targets_the_long_body() {
+        let mut rom = vec![0xEA; 0x10000];
+        rom[..5].copy_from_slice(&[0x4B, 0x20, 0x00, 0x82, 0x60]);
+        rom[0x0200..0x0204].copy_from_slice(&[0x5C, 0x00, 0x90, 0x01]);
+        rom[0x9000] = 0x6B;
+        let exits = HashMap::from([((0x019000, 1, 1), (1, 1))]);
+        let env = DecodeEnv {
+            callee_exit_mx: Some(&exits),
+            stop_on_unknown_callee_exit: true,
+            ..DecodeEnv::default()
+        };
+        let graph = decode_function(&rom, 0, 0x8000, 1, 1, Some(0x8005), &env);
+        let jsr = graph
+            .insns()
+            .iter()
+            .find(|di| di.insn.addr == 0x008001)
+            .unwrap();
+        assert_eq!(jsr.insn.long_call_trampoline_target, Some(0x019000));
+        assert_eq!(
+            analyze_function_exit_mx(&graph, Some(&exits)),
+            (Some(1), Some(1))
+        );
+        assert!(graph.unknown_callee_exit_sites.is_empty());
+    }
+
+    #[test]
+    fn phk_jsr_pea_jml_veneer_keeps_the_veneer_as_long_callee() {
+        let mut rom = vec![0xEA; 0x10000];
+        rom[..5].copy_from_slice(&[0x4B, 0x20, 0x00, 0x82, 0x60]);
+        rom[0x0200..0x0207].copy_from_slice(&[0xF4, 0xFB, 0x90, 0x5C, 0x00, 0x91, 0x01]);
+        rom[0x90FC] = 0x6B;
+        rom[0x9100] = 0x60;
+        let exits = HashMap::from([((0x008200, 1, 1), (1, 1))]);
+        let env = DecodeEnv {
+            callee_exit_mx: Some(&exits),
+            stop_on_unknown_callee_exit: true,
+            ..DecodeEnv::default()
+        };
+        let graph = decode_function(&rom, 0, 0x8000, 1, 1, Some(0x8005), &env);
+        let jsr = graph
+            .insns()
+            .iter()
+            .find(|di| di.insn.addr == 0x008001)
+            .unwrap();
+        assert_eq!(jsr.insn.long_call_trampoline_target, Some(0x008200));
+        assert_eq!(
+            analyze_function_exit_mx(&graph, Some(&exits)),
+            (Some(1), Some(1))
+        );
+        assert!(graph.unknown_callee_exit_sites.is_empty());
     }
 
     #[test]
