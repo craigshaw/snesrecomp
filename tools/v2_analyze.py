@@ -582,6 +582,8 @@ def build_manifest(rom: bytes, parsed, *, max_insns: int, max_nodes: int,
     dispatch_helpers = {}
     inline_arg_map = {}
     dispatch_helper_probes = set()
+    dispatch_helper_probe_kinds = {}
+    dispatch_helper_revision = 0
     inline_arg_probes = set()
 
     def target_is_code(key: VariantKey) -> bool:
@@ -604,7 +606,7 @@ def build_manifest(rom: bytes, parsed, *, max_insns: int, max_nodes: int,
         return True
 
     def decode_variant(key: VariantKey):
-        nonlocal dispatch_helpers, inline_arg_map
+        nonlocal dispatch_helpers, dispatch_helper_revision, inline_arg_map
         bank = (key.pc24 >> 16) & 0xFF
         pc = key.pc24 & 0xFFFF
         mirror_bank = _lorom_mirror_bank(bank)
@@ -657,23 +659,40 @@ def build_manifest(rom: bytes, parsed, *, max_insns: int, max_nodes: int,
         # code. Discover them at their first reachable call site, replace the
         # immutable input snapshot, and re-decode this node once with the new
         # facts. No generated-C feedback and no retained speculative CFGs.
-        helper_additions = {}
+        helper_changed = False
         inline_additions = {}
         for decoded in graph.insns.values():
             insn = decoded.insn
             if insn.mnem == "JSL" or (
                     insn.mnem == "JMP" and insn.length == 4):
                 target = insn.operand & 0xFFFFFF
-                if (target not in dispatch_helpers
-                        and target not in dispatch_helper_probes):
-                    dispatch_helper_probes.add(target)
+                probe = (target, insn.m_flag & 1, insn.x_flag & 1)
+                if probe not in dispatch_helper_probes:
+                    dispatch_helper_probes.add(probe)
                     try:
                         kind = classify_dispatch_helper(
-                            rom, (target >> 16) & 0xFF, target & 0xFFFF)
+                            rom, (target >> 16) & 0xFF, target & 0xFFFF,
+                            insn.m_flag, insn.x_flag)
                     except (AssertionError, IndexError):
                         kind = None
-                    if kind:
-                        helper_additions[target] = kind
+                    dispatch_helper_probe_kinds[probe] = kind
+                    observed_kinds = {
+                        observed_kind
+                        for (observed_target, _m, _x), observed_kind
+                        in dispatch_helper_probe_kinds.items()
+                        if observed_target == target
+                    }
+                    agreed_kind = (next(iter(observed_kinds))
+                                   if len(observed_kinds) == 1
+                                   and None not in observed_kinds else None)
+                    previous_kind = dispatch_helpers.get(target)
+                    if agreed_kind is None:
+                        dispatch_helpers.pop(target, None)
+                    else:
+                        dispatch_helpers[target] = agreed_kind
+                    if previous_kind != agreed_kind:
+                        dispatch_helper_revision += 1
+                        helper_changed = True
             if insn.mnem == "JSL":
                 target = insn.operand & 0xFFFFFF
             elif insn.mnem == "JSR" and insn.length == 3:
@@ -697,8 +716,7 @@ def build_manifest(rom: bytes, parsed, *, max_insns: int, max_nodes: int,
                 if byte_count_probes == 4 and len(byte_counts) == 1:
                     inline_additions[target] = byte_counts.pop()
 
-        if helper_additions or inline_additions:
-            dispatch_helpers = {**dispatch_helpers, **helper_additions}
+        if helper_changed or inline_additions:
             inline_arg_map = {**inline_arg_map, **inline_additions}
             kwargs["dispatch_helpers"] = dispatch_helpers or None
             kwargs["inline_arg_map"] = inline_arg_map or None
@@ -847,6 +865,7 @@ def build_manifest(rom: bytes, parsed, *, max_insns: int, max_nodes: int,
             round_exit_mode_sets = {}
             round_exit_equations = {}
             before_helpers = dict(dispatch_helpers)
+            before_helper_revision = dispatch_helper_revision
             before_inline = dict(inline_arg_map)
             before_poisoned = set(poisoned_variants)
             clear_decode_cache()
@@ -934,6 +953,7 @@ def build_manifest(rom: bytes, parsed, *, max_insns: int, max_nodes: int,
                 next_exit_modes == active_exit_modes
                 and next_exit_mode_sets == active_exit_mode_sets
                 and before_helpers == dispatch_helpers
+                and before_helper_revision == dispatch_helper_revision
                 and before_inline == inline_arg_map
                 and before_poisoned == poisoned_variants)
             active_exit_modes = next_exit_modes
