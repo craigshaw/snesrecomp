@@ -27,20 +27,33 @@ def instruction_targets():
     return frozenset(result)
 
 
-def validate_instruction_leaf(block_pairs):
-    """Fail closed until calls, branches and stack transforms are supported."""
-    from snes65816 import IMP, IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X, DP, DP_X, DP_Y
-    if len(block_pairs) != 1:
-        raise ValueError("instruction timing requires a single straight-line leaf block")
-    pairs = next(iter(block_pairs.values()))
-    if not pairs or pairs[-1][0].mnem not in ("RTS", "RTL"):
-        raise ValueError("instruction timing requires a final RTS or RTL")
-    for insn, _ in pairs[:-1]:
-        if (insn.mnem not in ("NOP", "LDA", "LDX", "LDY", "STA", "STX", "STY", "STZ")
-                or insn.mode not in (IMP, IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X,
-                                     DP, DP_X, DP_Y)):
-            raise ValueError(f"instruction timing does not yet support {insn.mnem} at {insn.addr:06X}")
-    return pairs
+def validate_instruction_leaf(block_pairs, cfg):
+    """Accept native leaves with local control flow and tested arithmetic."""
+    from snes65816 import (IMP, ACC, IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X,
+                          DP, DP_X, DP_Y, REL, REL16)
+    data_modes = (IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X, DP, DP_X, DP_Y)
+    branches = ("BEQ", "BNE", "BCC", "BCS", "BMI", "BPL", "BVC", "BVS", "BRA", "BRL")
+    returns = 0
+    for key, pairs in block_pairs.items():
+        if not pairs:
+            raise ValueError("instruction timing requires nonempty blocks")
+        successors = cfg.blocks[key].successors
+        if any(s not in block_pairs for s in successors):
+            raise ValueError("instruction timing requires local branch targets")
+        if not successors and pairs[-1][0].mnem not in ("RTS", "RTL"):
+            raise ValueError("instruction timing requires a final RTS or RTL")
+        for insn, _ in pairs:
+            supported = (
+                (insn.mnem in ("RTS", "RTL", "NOP") and insn.mode == IMP)
+                or (insn.mnem in ("LDA", "LDX", "LDY", "STA", "STX", "STY", "STZ",
+                                  "CMP", "ADC") and insn.mode in data_modes)
+                or (insn.mnem == "ASL" and insn.mode == ACC)
+                or (insn.mnem in branches and insn.mode in (REL, REL16)))
+            if not supported:
+                raise ValueError(f"instruction timing does not yet support {insn.mnem} at {insn.addr:06X}")
+            returns += insn.mnem in ("RTS", "RTL")
+    if not returns:
+        raise ValueError("instruction timing requires a reachable RTS or RTL")
 
 
 class BusTimingLines(list):
@@ -78,7 +91,7 @@ class InstructionTimingLines(BusTimingLines):
     def instruction(self, insn, cycles):
         self.pc = insn.addr & 0xFFFFFF
         self.extend([
-            "if (interp_bridge_lle_master_deadline_reached(cpu)) {",
+            "if (interp_bridge_lle_instruction_boundary_reached(cpu)) {",
             f"  return interp_bridge_lle_yield_unwind(cpu, 0x{self.pc:06X}u);",
             "}",
             "cpu->coprocessor_master_cycles = cpu->master_cycles;",

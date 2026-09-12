@@ -28,7 +28,7 @@ static unsigned write_count;
 static int recording;
 static uint32 event_entry;
 static RecompReturn (*event_body)(CpuState *);
-static uint64_t refresh_at, beam_nmi_at, last_sync;
+static uint64_t refresh_at, beam_nmi_at, beam_irq_at, last_sync;
 static unsigned refresh_count, sync_count;
 
 void snes_refresh_charge(void) {
@@ -41,6 +41,10 @@ void snes_refresh_charge(void) {
 void snes_sync_master_clock(Snes *snes, uint64_t master) {
     sync_count++;
     last_sync = master;
+    if (beam_irq_at && master >= beam_irq_at) {
+        snes->inIrq = true;
+        beam_irq_at = 0;
+    }
     if (beam_nmi_at && master >= beam_nmi_at) {
         snes->nmiPending = true;
         beam_nmi_at = 0;
@@ -101,7 +105,8 @@ int main(int argc, char **argv) {
     g_c.D = test->d;
     g_memsel = test->memsel;
     g_c.PB = (uint8)(test->pc >> 16);
-    cpu_mirrors_to_p(&g_c);
+    g_c.P = (uint8)((test->status & ~0x30u) | (test->m << 5) | (test->xf << 4));
+    cpu_p_to_mirrors(&g_c);
     load(test->pc, test->code, test->size);
     for (unsigned i = 0; i < test->init_count; ++i)
         RAM[test->init[i].address] = test->init[i].value;
@@ -141,6 +146,8 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[3], "refresh")) {
             refresh_at = 90;
             interp_bridge_set_master_deadline(120);
+        } else if (!strncmp(argv[3], "irq:", 4)) {
+            beam_irq_at = strtoull(argv[3]+4, NULL, 10);
         } else if (!strcmp(argv[3], "beam-nmi")) {
             beam_nmi_at = 90;
         } else {
@@ -151,6 +158,7 @@ int main(int argc, char **argv) {
             const uint32 resume = interp_bridge_lle_resume_pc();
             interp_bridge_set_master_deadline(1000);
             g_test_snes.nmiPending = false;
+            g_test_snes.inIrq = false;
             ok = ok && interp_bridge_run_until_quiescent(&g_c, resume) == 1;
         }
     } else if (!strcmp(argv[2], "aot"))
@@ -176,6 +184,8 @@ int main(int argc, char **argv) {
            g_push_depth, g_pop_underflow, refresh_count, sync_count,
            (unsigned long long)last_sync,
            event_entry ? g_snes->apuCatchupCycles : 0.0);
+    if (test->instruction_timing) printf(",\"irq\":%d", g_test_snes.inIrq);
+    if (test->instruction_timing && event_entry) printf(",\"pb\":%u", g_c.PB);
     printf(",\"writes\":[");
     for (unsigned i = 0; i < write_count; ++i)
         printf("%s{\"address\":%u,\"value\":%u,\"master\":%llu}",

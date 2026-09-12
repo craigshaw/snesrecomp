@@ -37,6 +37,10 @@ class InstructionTiming(unittest.TestCase):
                           code=[0xA9, 1, 0x8D, 0x0D, 0x42, 0xEA,
                                 0xA9, 0x55, 0x8D, 0, 0x10, 0x6B],
                           cpu=20, master=138))
+        cases.append(dict(name="irq-mmio", code=[0xA9, 0x55, 0x8D, 0, 0x42, 0x6B],
+                          status=0, cpu=12, master=90))
+        cases.append(dict(name="fast-irq-mmio", code=[0xA9, 0x55, 0x8D, 0, 0x42, 0x6B],
+                          pc=0x808000, memsel=1, status=0, cpu=12, master=78))
         cases.append(dict(name="enable-nmi", code=[0xA9, 0x81, 0x8D, 0, 0x42, 0x6B],
                           cpu=12, master=90))
         for c in cases:
@@ -99,12 +103,39 @@ class InstructionTiming(unittest.TestCase):
                         self.assertEqual(b['master_cycles'], 148 if event == 'refresh' else 108)
                         self.assertEqual(b['s'], 0x1FC)
                     events += 1
+            irq_leaf = next(i for i, c in enumerate(cases) if c['name'] == 'irq-mmio')
+            for selected in (leaf, irq_leaf):  # I set versus I clear.
+                for clock in (1, 61, 62, 63, 78, 79, 108, 109, 152):
+                    for resume in ((), ("resume",)):
+                        a = run(selected, "event-interp", f"irq:{clock}", *resume)
+                        b = run(selected, "event-aot", f"irq:{clock}", *resume)
+                        self.assertEqual(a, b, (selected, clock, resume, a, b))
+                        if selected == irq_leaf and not resume:
+                            self.assertEqual(b['irq'], 1)
+                            if 78 < clock <= 108:
+                                self.assertEqual(b['resume'], 0x8005)
+                                self.assertEqual(b['s'], 0x1FC)
+                            if 108 < clock <= 152:
+                                self.assertEqual(b['resume'], 0x7004)
+                                self.assertEqual(b['s'], 0x1FF)
+                        events += 1
+            fast_irq = next(i for i, c in enumerate(cases) if c['name'] == 'fast-irq-mmio')
+            for clock in (62, 63, 74, 75, 98, 99, 140):
+                for resume in ((), ("resume",)):
+                    a = run(fast_irq, "event-interp", f"irq:{clock}", *resume)
+                    b = run(fast_irq, "event-aot", f"irq:{clock}", *resume)
+                    self.assertEqual(a, b, (clock, resume, a, b))
+                    if not resume and clock > 98:
+                        self.assertEqual(b['resume'], 0x7004)
+                        self.assertEqual(b['pb'], 0)
+                        self.assertEqual(b['s'], 0x1FF)
+                    events += 1
             print(f"Instruction timing: {len(cases)} exact leaf comparisons and {events} event/resume comparisons passed")
 
     def test_selection_fails_closed(self):
         with patch.dict(os.environ, {"SNESRECOMP_EMIT_BUS_TIMING": "1",
                                     bus_timing.INSTRUCTION_ENV: "008000:1:0"}):
-            for code in ([0xD0, 1, 0xEA, 0x6B], [0x48, 0x68, 0x6B],
+            for code in ([0x22, 0x10, 0x80, 0, 0x6B], [0x48, 0x68, 0x6B],
                          [0xB1, 0x40, 0x6B], [0x40], [0xEE, 0, 0x10, 0x6B]):
                 with self.assertRaises(ValueError):
                     timing.emit_function(bytes(code) + bytes(32768-len(code)),

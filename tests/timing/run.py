@@ -100,7 +100,7 @@ def build(out: Path, cc: str, cases=None) -> Path:
                      f"{case.get('m', 1)}, {case.get('xf', 0)}, {case.get('db', 0)}, "
                      f"{case.get('x', 0)}, {case.get('y', 0)}, {case.get('d', 0)}, "
                      f"{case.get('memsel', 0)}, init_{i}, {len(memory)}, {name}, "
-                     f"{int(bool(case.get('instruction_timing')))}" + "}")
+                     f"{int(bool(case.get('instruction_timing')))}, {case.get('status', 4)}" + "}")
     header = """typedef struct TimingInit { uint32 address; uint8 value; } TimingInit;
 typedef struct TimingCase {
     const uint8_t *code; int size; uint32 pc;
@@ -108,6 +108,7 @@ typedef struct TimingCase {
     const TimingInit *init; unsigned init_count;
     RecompReturn (*body)(CpuState *);
     int instruction_timing;
+    uint8 status;
 } TimingCase;
 """
     (out / "timing_cases.inc").write_text(

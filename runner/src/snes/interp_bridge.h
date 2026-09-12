@@ -137,6 +137,10 @@ void interp_bridge_event_audit_test_stats(unsigned long long *crossings,
  * their legal byte boundaries before unwinding to the owning interpreter. */
 int interp_bridge_lle_master_deadline_reached(const CpuState *cpu);
 
+/* Full instruction boundary for selected AOT bodies: also sample unmasked
+ * CPU and coprocessor IRQ lines, using the interpreter's pending-IRQ rule. */
+int interp_bridge_lle_instruction_boundary_reached(const CpuState *cpu);
+
 /* Execute an architectural interrupt handler through its terminal RTI. The
  * caller has already materialized the hardware interrupt frame, usually with
  * cpu_push_interrupt_frame_at(). Do not enter an interrupt body directly from a

@@ -147,12 +147,14 @@ key. With the global bus option absent, unselected bodies retain their
 original generated code. This permits a one-body comparison against the
 interpreter without also changing the timing of existing AOT coverage.
 
-This bounded implementation accepts a single straight-line block ending in
-RTS or RTL. Its preceding instructions can be NOP, LDA/LDX/LDY,
-STA/STX/STY/STZ with immediate, direct-page, absolute or long addressing,
-including their supported indexed forms. Unsupported selected bodies fail
-generation. Emulation-mode invocations use the interpreter. Calls, branches,
-stack manipulation, indirect addressing, RMW, RTI and block moves are outside
+This bounded implementation accepts native leaf routines with local branches
+and RTS/RTL returns. Supported data instructions are NOP, LDA/LDX/LDY,
+STA/STX/STY/STZ, CMP and ADC with immediate, direct-page, absolute or long
+addressing, including their supported indexed forms. Accumulator ASL, the
+eight conditional branches, BRA and BRL are also accepted. Every branch must
+stay inside the selected function. Unsupported selected bodies fail
+generation. Emulation-mode invocations use the interpreter. Calls, external
+branches, stack manipulation, indirect addressing, RMW, RTI and block moves are outside
 this instruction-timing experiment.
 
 Each instruction accumulates costs locally while callbacks observe the
@@ -160,18 +162,21 @@ instruction's start clock, matching the bridge convention. Return-frame
 reads finish before committing the return instruction. A shared bridge
 completion function advances CPU/master clocks, refresh accounting, beam and
 coprocessors, and the existing APU accumulator. Each next instruction checks
-the scheduler deadline and pending NMI before doing any work. An unwind
+the scheduler deadline, pending NMI and unmasked CPU/coprocessor IRQ before
+doing any work. Returns check again after popping the guest frame, so an IRQ
+raised during RTS/RTL resumes at the caller before it executes another opcode. An unwind
 retains the exact next PC and live guest stack for interpreter resumption.
 
 ```sh
 python3 tests/timing/test_instruction_timing.py
 ```
 
-This test runs 143 complete leaf comparisons, including write timestamps and
-byte order, and 32 real bridge scheduler exit/resume comparisons in each of
+This test runs 145 complete leaf comparisons, including write timestamps and
+byte order, and 82 real bridge scheduler exit/resume comparisons in each of
 two modes: with and without the global bus option. It covers
 exact deadline boundaries, delayed-enable NMI, a simulated refresh delay and
-a simulated beam-triggered NMI. The event fixture also compares APU time
+a simulated beam-triggered NMI, and masked/unmasked IRQ at call, instruction
+and return boundaries. The event fixture also compares APU time
 accumulation. These peripheral hooks are test doubles, not hardware models.
 The shared C suite includes this test and checks that older timing modes
 keep their existing results.
@@ -180,3 +185,16 @@ The supported instruction list is a bounded experiment, not a claim of
 general MMIO equivalence. APU-port handshakes, DMA, real peripheral timing,
 optimised calls and other control paths still need title-level validation.
 No new generation option is enabled by default.
+
+
+The local-branch and arithmetic extension is checked by:
+
+```sh
+python3 tests/timing/test_branch_instruction_timing.py
+```
+
+In each option mode it checks 565 complete executions and 572 scheduler
+exit/resume cases. Coverage includes all conditional branches, coincident
+branch/fall-through targets, native forward/backward page crossing, folded branches, BRA/BRL,
+8/16-bit arithmetic, carry and decimal status, and the accepted memory read
+addressing forms. This suite is also included in `tests/run_c_tests.sh`.

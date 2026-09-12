@@ -710,6 +710,17 @@ void interp_bridge_set_master_deadline_event(uint64_t master_clock,
                                       : INTERP_DEADLINE_EVENT_UNKNOWN;
 }
 
+static int bridge_irq_pending(void) {
+    return g_snes &&
+        (g_snes->inIrq ||
+         (g_snes->cart && g_snes->cart->superfx &&
+          g_snes->cart->superfx->irq_pending) ||
+         (g_snes->cart && g_snes->cart->cx4 &&
+          cx4_irq_pending(g_snes->cart->cx4)) ||
+         (g_snes->cart && g_snes->cart->sa1 &&
+          sa1_cpu_irq_pending(g_snes->cart->sa1)));
+}
+
 int interp_bridge_lle_master_deadline_reached(const CpuState *cpu) {
     const int reached = cpu && s_lle_sched_depth > 0 &&
         s_interp_bounce_owner_depth > 0 &&
@@ -719,6 +730,16 @@ int interp_bridge_lle_master_deadline_reached(const CpuState *cpu) {
     if (reached)
         s_lle_next_unwind_is_deadline = 1;
     return reached;
+}
+
+int interp_bridge_lle_instruction_boundary_reached(const CpuState *cpu) {
+    if (interp_bridge_lle_master_deadline_reached(cpu)) return 1;
+    if (cpu && s_lle_sched_depth > 0 && s_interp_bounce_owner_depth > 0 &&
+        !cpu->_flag_I && bridge_irq_pending()) {
+        s_lle_next_unwind_is_deadline = 1;
+        return 1;
+    }
+    return 0;
 }
 
 RecompReturn interp_bridge_lle_yield_unwind(CpuState *cpu, uint32 resume_pc24) {
@@ -1081,17 +1102,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             bridge_apu_flush(cpu);
             return 1;
         }
-        if (auto_quiescent && steps && !in.i && g_snes &&
-            (g_snes->inIrq ||
-             (g_snes->cart && g_snes->cart->superfx &&
-              g_snes->cart->superfx->irq_pending) ||
-             /* The Cx4 asserts the CPU IRQ line when its program halts with
-              * interrupts enabled ($7F51 bit 0 clear). Same shape as the GSU
-              * line above; omitting it would starve the handler. */
-             (g_snes->cart && g_snes->cart->cx4 &&
-              cx4_irq_pending(g_snes->cart->cx4)) ||
-             (g_snes->cart && g_snes->cart->sa1 &&
-              sa1_cpu_irq_pending(g_snes->cart->sa1)))) {
+        if (auto_quiescent && steps && !in.i && bridge_irq_pending()) {
             s_lle_resume_pc24=pc_before;
             sync_interp_to_cpu(&in,cpu);
             bridge_apu_flush(cpu);

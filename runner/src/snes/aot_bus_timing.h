@@ -52,7 +52,7 @@ static inline void cpu_aot_write16(CpuState *cpu, uint32 pc, int audit,
     cpu_write16(cpu, bank, addr, value);
 }
 
-/* Opt-in straight-line leaf timing. Like interp_bridge_runOpcode, callbacks
+/* Opt-in native leaf instruction timing. Like interp_bridge_runOpcode, callbacks
  * observe the start of the instruction. This is not physical bus-edge timing.
  * Keep pending costs local so no future clock is visible to an MMIO callback. */
 typedef struct CpuAotInstructionTiming {

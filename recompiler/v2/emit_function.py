@@ -845,7 +845,7 @@ def emit_function(rom: bytes, bank: int, start: int,
     instruction_timing = (
         (bank << 16 | start, entry_m, entry_x) in bus_timing.instruction_targets())
     if instruction_timing:
-        bus_timing.validate_instruction_leaf(block_per_insn_ir)
+        bus_timing.validate_instruction_leaf(block_per_insn_ir, cfg)
 
     # ── Non-local-return idiom detection ────────────────────────────────
     # A basic block is an NLR-block if its IR has the shape
@@ -1571,14 +1571,20 @@ def emit_function(rom: bytes, bank: int, start: int,
                             f"if ({pred}) {{ "
                             + (f"interp_bridge_event_audit_charge(cpu, "
                                f"0x{branch_pc24:06X}u, {_blk_spd_expr}); "
-                               if _event_audit else "")
+                               if _event_audit and not instruction_timing else "")
                             + f"cpu->cycles += 1; "
-                            f"cpu->master_cycles += {_blk_spd_expr}; {target_stmt} }}")
+                            f"cpu->master_cycles += {_blk_spd_expr}; "
+                            + (lines.commit() + " " if instruction_timing else "")
+                            + f"{target_stmt} }}")
                     if fall is not None:
+                        if instruction_timing:
+                            lines.append(lines.commit())
                         lines.append(_goto_or_return(fall, source_pc24=blk_pc24)
                                      + " /* fall-through */")
                         block_terminated = True
                 elif isinstance(op, Goto):
+                    if instruction_timing:
+                        lines.append(lines.commit())
                     # JML to a registered dispatch helper (ExecutePtr /
                     # ExecutePtrLong). Bytes after the JML are a function-
                     # pointer table; the decoder already read them into
@@ -2002,7 +2008,8 @@ def emit_function(rom: bytes, bank: int, start: int,
                     # ReadReg, ALU, Read/Write, etc. — non-terminating.
                     for ln in emit_op(op, getattr(di_insn, 'addr', None)):
                         lines.append(ln)
-            if instruction_timing and di_insn.mnem not in ('RTS', 'RTL'):
+            if instruction_timing and not any(
+                    isinstance(op, (Return, CondBranch, Goto)) for op in ir_ops):
                 lines.append(lines.commit())
         # NLR with no terminator IR (block IR was pure-PullReg, like
         # $01:A3CB's [PLA, PLA, fall-through]). The SKIP setter wasn't
