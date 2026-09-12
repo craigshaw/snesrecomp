@@ -3498,6 +3498,9 @@ def _apply_constant_z_fold(graph: FunctionDecodeGraph) -> None:
         # Rewrite successors to single live edge.
         graph.insns[k] = DecodedInsn(key=k, insn=insn, successors=[live])
         insn.const_z_fold_unconditional = True
+        # Lowering removes the flag test, but a taken hardware branch still
+        # costs its extra cycle. Preserve the original edge for emission.
+        insn.const_z_fold_taken = taken
         insn.const_z_fold_dead_pc24 = dead.pc & 0xFFFFFF
 
         # Build a context-rich record for the report.

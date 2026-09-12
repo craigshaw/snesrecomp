@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
     init_cpu();
     g_c.emulation = 0;
     g_c.m_flag = test->m;
-    g_c.x_flag = 0;
+    g_c.x_flag = test->xf;
     g_c.DB = test->db;
     g_c.X = test->x;
     g_memsel = test->memsel;

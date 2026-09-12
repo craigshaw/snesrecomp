@@ -86,6 +86,9 @@ echo "=== interpreter and bridge ==="
     -lm -o "$OUT/bridge_test"
 "$OUT/bridge_test"
 
+echo "=== generated/interpreted folded-branch CPU cycles ==="
+python3 "$ROOT/tests/timing/test_branch_cycles.py"
+
 echo "=== DSP-1 bus/core shell ==="
 "$CC" -std=c11 -Wall -Wextra -Werror -O1 \
     -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \

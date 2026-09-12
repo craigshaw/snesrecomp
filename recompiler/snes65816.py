@@ -172,7 +172,7 @@ class Insn:
                   'dispatch_stack_pointer', 'dispatch_forced_m',
                   'dispatch_forced_x', 'dispatch_consumed_stack_bytes',
                   'dispatch_configured_stack_bytes',
-                  'const_z_fold_unconditional', 'const_z_fold_dead_pc24',
+                  'const_z_fold_unconditional', 'const_z_fold_taken', 'const_z_fold_dead_pc24',
                   'data_region_exec', 'terminal_jsr', 'noreturn_jsr',
                   'return_trampoline', 'return_trampoline_pc',
                   'long_call_trampoline_target', 'call_trampoline_setup')
@@ -247,9 +247,10 @@ class Insn:
         # Constant-Z branch fold: when set on a BEQ/BNE, the preceding
         # same-block immediate-LD* made Z statically known and the
         # branch was rewritten to an unconditional Goto with a single
-        # live successor. dead_pc24 records the pruned edge for the
-        # build report.
+        # live successor. taken preserves the hardware branch-cycle cost;
+        # dead_pc24 records the pruned edge for the build report.
         self.const_z_fold_unconditional = False
+        self.const_z_fold_taken = False
         self.const_z_fold_dead_pc24 = None
         self.data_region_exec = False
 

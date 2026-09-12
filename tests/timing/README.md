@@ -60,8 +60,23 @@ The current emitter charges its 12 CPU cycles at eight clocks each, giving 96.
 | Indexed WRAM read across page boundary; RTL | 11 | 82 |
 
 The branch cases distinguish constant-Z folding from a runtime condition.
-The folded taken branch currently loses its extra CPU cycle: AOT reports 10,
-while the interpreter reports 11. The dynamic taken branch retains it.
+At the pinned integration revision, the folded taken branch loses its extra
+CPU cycle: AOT reports 10, while the interpreter reports 11. The dynamic
+taken branch retains it. The following branch-cycle fix restores the folded
+case to 11 CPU cycles; master-clock parity remains unresolved.
+
+Run the focused executable regression with:
+
+```sh
+python3 tests/timing/test_branch_cycles.py
+```
+
+It checks 96 combinations of LDA/LDX/LDY immediate, 8/16-bit load width,
+BEQ/BNE, taken/untaken, zero/nonzero displacement, and SlowROM/FastROM. Each
+tier must match the independently calculated CPU count and the other tier's
+checked architectural state. This test is included in `tests/run_c_tests.sh`,
+which therefore requires Python 3 as well as a C compiler. Passing this
+focused test does not imply that the full timing differential passes.
 
 ## Scope
 

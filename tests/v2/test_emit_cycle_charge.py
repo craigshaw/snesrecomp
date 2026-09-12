@@ -85,6 +85,36 @@ def test_store_abs_x_has_no_page_cross_charge():
     assert "page-cross" not in src, src
 
 
+def test_folded_branch_charges_only_the_taken_edge():
+    for branch in (0xD0, 0xF0):  # BNE, BEQ
+        for value in (0, 1):
+            rom = make_lorom_bank0({0x8000: bytes([
+                0xA9, value, branch, 0x01, 0xEA, 0x6B,
+            ])})
+            src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=0)
+            taken = (value != 0) if branch == 0xD0 else (value == 0)
+            charge = "cpu->cycles += 1; cpu->master_cycles += 8;  /* folded taken branch */"
+            assert src.count(charge) == int(taken), src
+
+
+def test_folded_taken_branch_audit_uses_branch_pc():
+    rom = make_lorom_bank0({0x8000: bytes([0xA9, 1, 0xD0, 1, 0xEA, 0x6B])})
+    name = 'SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT'
+    previous = os.environ.get(name)
+    try:
+        os.environ[name] = '1'
+        src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=0)
+        assert (
+            "interp_bridge_event_audit_charge(cpu, 0x008002u, 8); "
+            "cpu->cycles += 1; cpu->master_cycles += 8;  /* folded taken branch */"
+        ) in src, src
+    finally:
+        if previous is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
+
+
 def test_every_block_with_insns_is_charged():
     # BCS fork -> three blocks (entry, fall-through, taken), each non-empty,
     # so each must carry a cpu->cycles charge.

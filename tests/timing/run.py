@@ -56,27 +56,29 @@ CASES = [
 ]
 
 
-def build(out: Path, cc: str) -> Path:
+def build(out: Path, cc: str, cases=None) -> Path:
+    if cases is None:
+        cases = CASES
     bodies = []
     table = []
-    for i, case in enumerate(CASES):
+    for i, case in enumerate(cases):
         pc = case.get("pc", 0x008000)
         code = bytes(case["code"])
         rom = bytearray(0x8000)
         rom[pc & 0x7FFF:(pc & 0x7FFF) + len(code)] = code
-        name = f"timing_case_{i}_M{case.get('m', 1)}X0"
+        name = f"timing_case_{i}_M{case.get('m', 1)}X{case.get('xf', 0)}"
         bodies.append(emit_function(bytes(rom), bank=pc >> 16,
                                     start=pc & 0xFFFF,
-                                    entry_m=case.get("m", 1), entry_x=0,
+                                    entry_m=case.get("m", 1), entry_x=case.get("xf", 0),
                                     func_name=f"timing_case_{i}"))
         bodies.append(f"static const uint8_t code_{i}[] = {{" +
                       ",".join(str(x) for x in code) + "};")
         table.append(f"{{code_{i}, sizeof(code_{i}), {pc}, "
-                     f"{case.get('m', 1)}, {case.get('db', 0)}, "
+                     f"{case.get('m', 1)}, {case.get('xf', 0)}, {case.get('db', 0)}, "
                      f"{case.get('x', 0)}, {case.get('memsel', 0)}, {name}" + "}")
     header = """typedef struct TimingCase {
     const uint8_t *code; int size; uint32 pc;
-    uint8 m, db; uint16 x; uint8 memsel;
+    uint8 m, xf, db; uint16 x; uint8 memsel;
     RecompReturn (*body)(CpuState *);
 } TimingCase;
 """

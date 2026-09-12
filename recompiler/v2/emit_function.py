@@ -104,9 +104,10 @@ def _block_speed(bank: int, pc: int):
 
 def _dynamic_charge_lines(insn, speed_expr: str = "8",
                           audit_pc24: Optional[int] = None) -> List[str]:
-    """Runtime-only per-instruction cycle charges (Axis-2 step C dynamics),
+    """Per-instruction cycle additions (Axis-2 step C dynamics),
     emitted as conditional `cpu->cycles += 1;` statements just before the
-    instruction's effect. Branch-taken is charged at the terminator instead.
+    instruction's effect. Unfolded branches charge at the terminator; a
+    folded taken branch retains its unconditional charge here.
 
     Each +1 CPU-cycle charge also adds `speed_expr` master clocks (Axis-5), so
     the master-clock accumulator stays region-weighted-consistent with `cycles`.
@@ -127,6 +128,12 @@ def _dynamic_charge_lines(insn, speed_expr: str = "8",
         f"interp_bridge_event_audit_charge(cpu, 0x{audit_pc24:06X}u, "
         f"{speed_expr}); " if audit else ""
     )
+    if getattr(insn, 'const_z_fold_taken', False):
+        # Constant-Z folding replaces CondBranch with Goto. Keep the same
+        # taken-edge charge, at the branch instruction, without a flag test.
+        out.append(
+            f"{audit_call}cpu->cycles += 1; "
+            f"cpu->master_cycles += {speed_expr};  /* folded taken branch */")
     if 'dp' in charges:
         out.append(
             f"if (cpu->D & 0xFF) {{ {audit_call}cpu->cycles += 1; "
