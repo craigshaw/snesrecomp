@@ -78,7 +78,54 @@ checked architectural state. This test is included in `tests/run_c_tests.sh`,
 which therefore requires Python 3 as well as a C compiler. Passing this
 focused test does not imply that the full timing differential passes.
 
-## Scope
+## Experimental bus-clock accounting
+
+After the indexed-cycle and bus-clock patches, run:
+
+```sh
+python3 tests/timing/run.py --bus-timing --out-dir build/timing-bus-check
+python3 tests/timing/test_bus_clocks.py
+```
+
+The first command still returns 1: all 14 CPU/master totals agree, but five
+write-timestamp comparisons fail. The second checks final clocks, registers,
+and final written bytes in 376 cases and returns 0. It reports 31 differing
+byte-write sequences separately. Final memory agreement does not establish
+equivalent MMIO side effects, byte-write order, or write timestamps.
+
+Coverage includes direct/absolute/long/indirect reads and writes, 8/16-bit
+operand widths, indexed writes and read-modify-write, word accesses across
+speed-region boundaries, a nonzero direct-page low byte, stack operations,
+ordinary JSR/JSL calls and RTS/RTL/RTI returns, and multi-byte MVN/MVP.
+The fixture supports ordinary paired calls. It does not model arbitrary
+manual return-frame manipulation or validate all optimised call/dispatch
+trampolines and omitted stack operations.
+
+For actual generation, `SNESRECOMP_EMIT_BUS_TIMING=1` enables the experimental
+path. The option participates in the generation-cache key, together with the
+shared instruction/cycle model sources. With the option absent, generated
+code retains block costs at code-region speed. The indexed-write cycle
+corrections apply independently of this option in the generator/interpreter.
+
+Enabled generation precharges six master clocks for each CPU cycle and adds
+the excess cost for each instruction fetch and emitted data/stack access.
+Host return-frame inspection reads remain uncharged. Indexed long-indirect
+pointer reads are evaluated once, and RTI's discarded return bytes still
+contribute their access costs. Runtime-only internal cycles cost six clocks.
+MEMSEL is sampled at each fetch/access; no extra guest memory reads are made
+solely to calculate timing.
+
+This is an accounting experiment. Blocks still precharge their base cost,
+and no new per-instruction event/yield policy is introduced. Keep it out of
+normal title generation until the title comparisons pass. Correct totals in
+these synthetic cases are not a claim of complete hardware bus accuracy.
+
+The indexed write/RMW correction follows the fixed indexed-write base costs
+in the [WDC W65C816S datasheet](https://www.westerndesigncenter.com/wdc/documentation/w65c816s.pdf),
+Tables 3-1 and 5-4. The old interpreter added another conditional cycle to
+these writes; the generator also incorrectly added page-cross cycles to RMW.
+
+## Scope and remaining timing work
 
 The fixture reuses the bridge suite's flat bus and disabled peripheral/event
 scheduling. It does not validate DMA, refresh, raster deadlines, interrupts,

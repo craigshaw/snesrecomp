@@ -39,6 +39,28 @@ def _run(rom_path, cfg_dir, out_dir):
     ], text=True, capture_output=True)
 
 
+def test_bus_timing_option_invalidates_generation_cache(tmp_path, monkeypatch):
+    rom_path, cfg_dir, out_dir = _fixture(tmp_path, target_opcode=0xEA)
+    monkeypatch.delenv('SNESRECOMP_EMIT_BUS_TIMING', raising=False)
+    first = _run(rom_path, cfg_dir, out_dir)
+    assert first.returncode == 0, first.stdout + first.stderr
+    bank_path = out_dir / 'bank00_v2.c'
+    legacy = bank_path.read_bytes()
+    assert b'aot_bus_timing.h' not in legacy
+    monkeypatch.setenv('SNESRECOMP_EMIT_BUS_TIMING', '1')
+    enabled = _run(rom_path, cfg_dir, out_dir)
+    assert enabled.returncode == 0, enabled.stdout + enabled.stderr
+    assert b'aot_bus_timing.h' in bank_path.read_bytes()
+    assert 'reused verified published output' not in enabled.stdout
+    repeated = _run(rom_path, cfg_dir, out_dir)
+    assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+    assert 'reused verified published output' in repeated.stdout
+    monkeypatch.delenv('SNESRECOMP_EMIT_BUS_TIMING')
+    restored = _run(rom_path, cfg_dir, out_dir)
+    assert restored.returncode == 0, restored.stdout + restored.stderr
+    assert bank_path.read_bytes() == legacy
+
+
 def test_manifest_emitter_keeps_structural_target_as_lle(tmp_path):
     rom_path, cfg_dir, out_dir = _fixture(tmp_path, target_opcode=0x00)
     result = _run(rom_path, cfg_dir, out_dir)

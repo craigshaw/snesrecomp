@@ -57,22 +57,35 @@ int main(int argc, char **argv) {
     g_c.x_flag = test->xf;
     g_c.DB = test->db;
     g_c.X = test->x;
+    g_c.Y = test->y;
+    g_c.D = test->d;
     g_memsel = test->memsel;
     g_c.PB = (uint8)(test->pc >> 16);
     cpu_mirrors_to_p(&g_c);
     load(test->pc, test->code, test->size);
+    for (unsigned i = 0; i < test->init_count; ++i)
+        RAM[test->init[i].address] = test->init[i].value;
     /* A real RTL frame for a return to $00:9000, outside every fake entry. */
     g_c.S = 0x01FC;
     RAM[0x01FD] = 0xFF;
     RAM[0x01FE] = 0x8F;
     RAM[0x01FF] = 0;
     g_c.host_return_valid = 3;
+    int interrupt = test->code[test->size - 1] == 0x40;
+    if (interrupt) {
+        g_c.S = 0x01FB;
+        RAM[0x01FC] = g_c.P;
+        RAM[0x01FD] = 0;
+        RAM[0x01FE] = 0x90;
+        g_c.host_return_valid = 0;
+    }
     recording = 1;
     int ok;
     if (!strcmp(argv[2], "aot"))
         ok = test->body(&g_c) == RECOMP_RETURN_NORMAL;
     else if (!strcmp(argv[2], "interp"))
-        ok = interp_bridge_run(&g_c, test->pc) == 1;
+        ok = (interrupt ? interp_bridge_run_interrupt(&g_c, test->pc)
+                        : interp_bridge_run(&g_c, test->pc)) == 1;
     else return 2;
     recording = 0;
     cpu_mirrors_to_p(&g_c);

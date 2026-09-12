@@ -6,6 +6,7 @@ import os
 import pathlib
 import re
 import tempfile
+from unittest.mock import patch
 
 from _helpers import make_lorom_bank0  # noqa: E402
 from v2.emit_function import emit_function  # noqa: E402
@@ -113,6 +114,27 @@ def test_folded_taken_branch_audit_uses_branch_pc():
             os.environ.pop(name, None)
         else:
             os.environ[name] = previous
+
+
+def test_bus_timing_separates_base_fetch_and_data_charges():
+    rom = make_lorom_bank0({0x8000: bytes([0xA9, 0, 0x8D, 0, 0x42, 0x6B])})
+    with patch.dict(os.environ, {'SNESRECOMP_EMIT_BUS_TIMING': '1',
+                                'SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT': '1'}):
+        src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=0)
+    assert 'cpu->master_cycles += 72;' in src  # 12 CPU cycles at six clocks.
+    assert 'cpu_aot_fetch_extra(cpu, 0x008000u, 2, 1);' in src
+    assert 'cpu_aot_fetch_extra(cpu, 0x008002u, 3, 1);' in src
+    assert 'cpu_aot_write8(cpu, 0x008002u, 1,' in src
+    # Host return-frame inspection is not a guest bus transfer.
+    prologue = src[:src.index('  L_8000_M1X0:')]
+    assert 'cpu_read8(cpu,' in prologue
+    assert 'cpu_aot_read8(cpu,' not in prologue
+
+
+def test_indexed_rmw_has_no_dynamic_page_cross_charge():
+    rom = make_lorom_bank0({0x8000: bytes([0xFE, 0xFF, 0x10, 0x6B])})
+    src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=0)
+    assert 'page-cross' not in src
 
 
 def test_every_block_with_insns_is_charged():

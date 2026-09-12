@@ -40,6 +40,7 @@ from v2.naming import (  # noqa: E402
     variant_suffix as _variant_suffix,
 )
 from v2.event_precision import load_event_precision_sites  # noqa: E402
+from v2 import bus_timing  # noqa: E402
 from snes_cycles import (  # noqa: E402
     block_static_cycles, instr_runtime_charges, region_speed,
 )
@@ -1373,11 +1374,13 @@ def emit_function(rom: bytes, bank: int, start: int,
 
     for key in block_order:
         block = cfg.blocks[key]
-        lines: List[str] = []
+        lines: List[str] = bus_timing.BusTimingLines() if bus_timing.enabled() else []
         block_terminated = False  # True if last op was branch/goto/return/call
         # Axis-5: master-clocks-per-CPU-cycle for this block's code region, used
         # to weight the dynamic (D.l/page-cross/branch-taken) master charges.
         _blk_spd_expr, _blk_spd_const = _block_speed(bank, key.pc)
+        if bus_timing.enabled():
+            _blk_spd_expr, _blk_spd_const = "6", 6
         _event_audit = bool(
             os.environ.get('SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT'))
 
@@ -1496,6 +1499,8 @@ def emit_function(rom: bytes, bank: int, start: int,
                   f'skip_emit_idx={sorted(skip_emit_idx)}',
                   file=_sys.stderr, flush=True)
         for ii, (di_insn, ir_ops) in enumerate(pairs):
+            if bus_timing.enabled():
+                lines.instruction(di_insn)
             # NLR: inject _pending_skip setter + diagnostics RIGHT BEFORE
             # the terminator insn. This ensures any preceding setup ops
             # have already emitted, and the upcoming Goto/Return picks up
@@ -2055,6 +2060,8 @@ def emit_function(rom: bytes, bank: int, start: int,
 
     # Compose the function source with labels per block.
     src: List[str] = []
+    if bus_timing.enabled():
+        src.append('#include "snes/aot_bus_timing.h"')
     src.append(f"RecompReturn {func_name}(CpuState *cpu) {{")
     # Diagnostics — same call-stack plumbing v1 emitted, so the runtime
     # debug_server's `call_stack` cmd and crash-handler attribution work.
@@ -2198,6 +2205,8 @@ def emit_function(rom: bytes, bank: int, start: int,
         if _cyc_const:
             src.append(f'    cpu->cycles += {_cyc_const};')
             _spd_expr, _spd_const = _block_speed(bank, key.pc)
+            if bus_timing.enabled():
+                _spd_expr, _spd_const = "6", 6
             if _spd_const is not None:
                 if os.environ.get('SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT'):
                     src.append(

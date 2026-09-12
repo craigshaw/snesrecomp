@@ -66,6 +66,15 @@ def build(out: Path, cc: str, cases=None) -> Path:
         code = bytes(case["code"])
         rom = bytearray(0x8000)
         rom[pc & 0x7FFF:(pc & 0x7FFF) + len(code)] = code
+        for address, value in case.get("memory", {}).items():
+            if address & 0xFFFF >= 0x8000:
+                rom[address & 0x7FFF] = value
+        for target in case.get("callees", []):
+            for m in (0, 1):
+                for xf in (0, 1):
+                    bodies.append(emit_function(bytes(rom), bank=target >> 16,
+                                                start=target & 0xFFFF,
+                                                entry_m=m, entry_x=xf))
         name = f"timing_case_{i}_M{case.get('m', 1)}X{case.get('xf', 0)}"
         bodies.append(emit_function(bytes(rom), bank=pc >> 16,
                                     start=pc & 0xFFFF,
@@ -73,12 +82,19 @@ def build(out: Path, cc: str, cases=None) -> Path:
                                     func_name=f"timing_case_{i}"))
         bodies.append(f"static const uint8_t code_{i}[] = {{" +
                       ",".join(str(x) for x in code) + "};")
+        memory = case.get("memory", {})
+        bodies.append(f"static const TimingInit init_{i}[] = {{" +
+                      (",".join(f"{{{addr},{value}}}" for addr, value in memory.items())
+                       or "{0,0}") + "};")
         table.append(f"{{code_{i}, sizeof(code_{i}), {pc}, "
                      f"{case.get('m', 1)}, {case.get('xf', 0)}, {case.get('db', 0)}, "
-                     f"{case.get('x', 0)}, {case.get('memsel', 0)}, {name}" + "}")
-    header = """typedef struct TimingCase {
+                     f"{case.get('x', 0)}, {case.get('y', 0)}, {case.get('d', 0)}, "
+                     f"{case.get('memsel', 0)}, init_{i}, {len(memory)}, {name}" + "}")
+    header = """typedef struct TimingInit { uint32 address; uint8 value; } TimingInit;
+typedef struct TimingCase {
     const uint8_t *code; int size; uint32 pc;
-    uint8 m, xf, db; uint16 x; uint8 memsel;
+    uint8 m, xf, db; uint16 x, y, d; uint8 memsel;
+    const TimingInit *init; unsigned init_count;
     RecompReturn (*body)(CpuState *);
 } TimingCase;
 """
@@ -152,6 +168,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path)
     parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
+    parser.add_argument("--bus-timing", action="store_true",
+                        help="enable experimental generated bus-clock accounting")
     args = parser.parse_args()
     try:
         # Prevent diagnostic environment settings from changing the tested code
@@ -159,6 +177,8 @@ def main() -> int:
         for key in tuple(os.environ):
             if key.startswith("SNESRECOMP_"):
                 os.environ.pop(key)
+        if args.bus_timing:
+            os.environ["SNESRECOMP_EMIT_BUS_TIMING"] = "1"
         if args.out_dir:
             out = args.out_dir.resolve()
             out.mkdir(parents=True, exist_ok=False)

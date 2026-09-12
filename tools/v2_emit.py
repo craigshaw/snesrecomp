@@ -250,6 +250,8 @@ def main() -> int:
             )
         tree_digest = _tree_digest((
             REPO / "recompiler" / "v2", pathlib.Path(__file__).resolve(),
+            REPO / "recompiler" / "snes_cycles.py",
+            REPO / "recompiler" / "snes65816.py",
             REPO / "tools" / "v2_analyze.py", *native_inputs))
         # These environment switches change emitted AOT bodies, so they must
         # participate in the published-output cache key. Treat any non-empty
@@ -258,9 +260,11 @@ def main() -> int:
         event_audit = bool(os.environ.get(
             "SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT"))
         event_precision = event_precision_profile_digest()
+        bus_timing = bool(os.environ.get("SNESRECOMP_EMIT_BUS_TIMING"))
         return hashlib.sha256(
             (f"{tree_digest}\0aot_deny_gate={int(deny_gate)}"
              f"\0event_crossing_audit={int(event_audit)}"
+             f"\0bus_timing={int(bus_timing)}"
              f"\0event_precision={event_precision}").encode()
         ).hexdigest()
 

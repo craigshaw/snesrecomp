@@ -36,6 +36,7 @@ for p in (str(_THIS_DIR), str(_RECOMPILER_DIR)):
 from typing import Dict, List, Optional, Tuple  # noqa: E402
 from snes_cycles import region_speed  # noqa: E402
 from v2.naming import variant_suffix as _variant_suffix  # noqa: E402
+from v2 import bus_timing  # noqa: E402
 
 # Resolver: 24-bit address (bank << 16 | pc) -> friendly C function name.
 # Populated by emit_bank before each bank emit (a process-wide map of every
@@ -556,13 +557,30 @@ def _segref_addr_expr(seg: SegRef) -> tuple:
 
 def _emit_read(op: Read) -> List[str]:
     bank, addr = _segref_addr_expr(op.seg)
-    return [f"{widths.ctype(op.width)} {_v(op.out)} = "
+    prefix, bank, addr = _bus_address_once(op.seg, bank, addr)
+    return prefix + [f"{widths.ctype(op.width)} {_v(op.out)} = "
             f"{widths.read_fn(op.width)}(cpu, {bank}, {addr});"]
 
 
 def _emit_write(op: Write) -> List[str]:
     bank, addr = _segref_addr_expr(op.seg)
-    return [f"{widths.write_fn(op.width)}(cpu, {bank}, {addr}, {_v(op.src)});"]
+    prefix, bank, addr = _bus_address_once(op.seg, bank, addr)
+    return prefix + [f"{widths.write_fn(op.width)}(cpu, {bank}, {addr}, {_v(op.src)});"]
+
+
+def _bus_address_once(seg, bank, addr):
+    if (bus_timing.enabled() and seg.kind == SegKind.DP_INDIRECT_LONG
+            and seg.index is not None):
+        # Both bank/offset expressions otherwise evaluate the same pointer
+        # reads. Materialise once so the pointer contributes three bus bytes.
+        ptr = f"(uint16)(cpu->D + {seg.offset:#06x})"
+        name = f"_bus_addr_{_CURRENT_SOURCE_PC24:06x}"
+        idx = "cpu->X" if seg.index == Reg.X else "cpu->Y"
+        prefix = [f"uint32 {name} = cpu_read16(cpu, 0x00, {ptr});",
+                  f"{name} |= (uint32)cpu_read8(cpu, 0x00, (uint16)({ptr} + 2)) << 16;",
+                  f"{name} += {idx};"]
+        return prefix, f"(uint8)({name} >> 16)", f"(uint16){name}"
+    return [], bank, addr
 
 
 def _emit_readreg(op: ReadReg) -> List[str]:
@@ -2319,6 +2337,10 @@ def _emit_return(op: Return) -> List[str]:
         return [
             "cpu_trace_event(cpu, 0, CPU_TR_RTI, 0, 0);",
             "{ cpu->S = (uint16)(cpu->S + 1); cpu->P = cpu_read8(cpu, 0x00, cpu->S); cpu_p_to_mirrors(cpu);",
+            *([f"  cpu_aot_bus_extra(cpu, {_trace_pc_arg()}, "
+               f"{int(bool(os.environ.get('SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT')))}, "
+               "0, (uint16)(cpu->S + 1), cpu->emulation ? 2 : 3);"]
+              if bus_timing.enabled() else []),
             "  cpu->S = (uint16)(cpu->S + 2);  /* pull + discard PC */",
             "  if (!cpu->emulation) cpu->S = (uint16)(cpu->S + 1);  /* native: pull + discard PB */",
             "  cpu_trace_px_record(cpu, 0, 3 /*RTI*/, cpu->P, cpu->P);",
@@ -2547,6 +2569,8 @@ def _emit_blockmove(op: BlockMove) -> List[str]:
     fast_speed = region_speed(_CURRENT_SOURCE_PC24, 1)
     speed_expr = (str(slow_speed) if slow_speed == fast_speed else
                   f"(g_memsel ? {fast_speed} : {slow_speed})")
+    if bus_timing.enabled():
+        speed_expr = "6"
     audit_line = (
         f"      interp_bridge_event_audit_charge(cpu, {trace_pc}, "
         f"7 * {speed_expr});"
@@ -2578,6 +2602,9 @@ def _emit_blockmove(op: BlockMove) -> List[str]:
         audit_line,
         "      cpu->cycles += 7;",
         f"      cpu->master_cycles += 7 * {speed_expr};",
+        *([f"      cpu_aot_fetch_extra(cpu, {trace_pc}, 3, "
+           f"{int(bool(os.environ.get('SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT')))});"]
+          if bus_timing.enabled() else []),
         "    }",
         "  } while (cpu->A != 0xFFFF);",
         "}",
