@@ -2285,7 +2285,7 @@ def _emit_call(op: Call) -> List[str]:
     return lines
 
 
-def _emit_return(op: Return) -> List[str]:
+def _emit_return(op: Return, instruction_commit: Optional[str] = None) -> List[str]:
     """RTS / RTL / RTI emit. Reads + clears the function-LOCAL
     `_pending_skip` (set by an upstream NLR-pattern block on the same
     path) and returns its value. NORMAL paths get _pending_skip == 0
@@ -2380,6 +2380,8 @@ def _emit_return(op: Return) -> List[str]:
         lines.append("  uint8 _rpb = cpu_read8(cpu, 0x00, cpu->S);")
     else:
         lines.append("  uint8 _rpb = cpu->PB;")
+    if instruction_commit:
+        lines.append("  " + instruction_commit)
     # Frame size this RTS/RTL pops (RTS = 2 bytes, RTL = 3). The dispatch
     # miss-restore below must reflect that this function popped its OWN return
     # frame, i.e. restore S to entry_s + frame_size — NOT bare entry_s.
@@ -2655,7 +2657,8 @@ _DISPATCH = {
 }
 
 
-def emit_op(op: IROp, source_pc24: Optional[int] = None) -> List[str]:
+def emit_op(op: IROp, source_pc24: Optional[int] = None, *,
+            instruction_commit: Optional[str] = None) -> List[str]:
     """Lower a single IR op to one or more lines of C."""
     h = _DISPATCH.get(type(op))
     if h is None:
@@ -2664,6 +2667,9 @@ def emit_op(op: IROp, source_pc24: Optional[int] = None) -> List[str]:
     old_source_pc24 = _CURRENT_SOURCE_PC24
     _CURRENT_SOURCE_PC24 = (int(source_pc24) & 0xFFFFFF) if source_pc24 is not None else 0
     try:
+        if instruction_commit is not None:
+            assert isinstance(op, Return) and not op.interrupt
+            return _emit_return(op, instruction_commit)
         return [ln for ln in h(op) if ln]
     finally:
         _CURRENT_SOURCE_PC24 = old_source_pc24

@@ -72,6 +72,11 @@ void interp_bridge_dump_recent_steps(int n, FILE *out);
  */
 int interp_bridge_run(CpuState *cpu, uint32_t entry_pc24);
 
+/* Finish one native opcode, after its bus callbacks. Used by the interpreter
+ * and opt-in generated leaf timing, with the same refresh, beam and APU work. */
+void interp_bridge_commit_instruction(CpuState *cpu, unsigned cycles,
+                                      uint64_t master);
+
 /* Faithful LLE of an infinite cooperative-scheduler loop (e.g. MMX's $8099 task
  * scheduler): run the real ROM scheduler under interp816 from entry_pc24 and
  * yield after one frame's slot walk — when it reaches yield_pc (its vblank-wait

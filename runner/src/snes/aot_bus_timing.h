@@ -51,4 +51,45 @@ static inline void cpu_aot_write16(CpuState *cpu, uint32 pc, int audit,
     cpu_aot_bus_extra(cpu, pc, audit, bank, addr, 2);
     cpu_write16(cpu, bank, addr, value);
 }
+
+/* Opt-in straight-line leaf timing. Like interp_bridge_runOpcode, callbacks
+ * observe the start of the instruction. This is not physical bus-edge timing.
+ * Keep pending costs local so no future clock is visible to an MMIO callback. */
+typedef struct CpuAotInstructionTiming {
+    unsigned cycles;
+    unsigned master;
+} CpuAotInstructionTiming;
+
+static inline void cpu_aot_insn_bus_extra(CpuAotInstructionTiming *timing,
+                                         uint8 bank, uint16 addr, unsigned bytes) {
+    for (unsigned i = 0; i < bytes; ++i)
+        timing->master += (unsigned)snes_region_speed(((uint32)bank << 16) |
+            (uint16)(addr + i), g_memsel) - SNES_CYC_INTERNAL;
+}
+
+static inline uint8 cpu_aot_insn_read8(CpuState *cpu, CpuAotInstructionTiming *timing,
+                                      uint8 bank, uint16 addr) {
+    cpu_aot_insn_bus_extra(timing, bank, addr, 1);
+    return cpu_read8(cpu, bank, addr);
+}
+static inline uint16 cpu_aot_insn_read16(CpuState *cpu, CpuAotInstructionTiming *timing,
+                                        uint8 bank, uint16 addr) {
+    cpu_aot_insn_bus_extra(timing, bank, addr, 2);
+    return cpu_read16(cpu, bank, addr);
+}
+static inline void cpu_aot_insn_write8(CpuState *cpu, CpuAotInstructionTiming *timing,
+                                      uint8 bank, uint16 addr, uint8 value) {
+    cpu_aot_insn_bus_extra(timing, bank, addr, 1);
+    cpu_write8(cpu, bank, addr, value);
+}
+static inline void cpu_aot_insn_write16(CpuState *cpu, CpuAotInstructionTiming *timing,
+                                       uint8 bank, uint16 addr, uint16 value) {
+    cpu_aot_insn_bus_extra(timing, bank, addr, 2);
+    cpu_write16(cpu, bank, addr, value);
+}
+static inline void cpu_aot_insn_commit(CpuState *cpu, CpuAotInstructionTiming *timing,
+                                      uint32 pc, int audit) {
+    if (audit) interp_bridge_event_audit_charge(cpu, pc, timing->master);
+    interp_bridge_commit_instruction(cpu, timing->cycles, timing->master);
+}
 #endif

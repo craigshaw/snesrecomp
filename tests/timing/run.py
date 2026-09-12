@@ -76,10 +76,20 @@ def build(out: Path, cc: str, cases=None) -> Path:
                                                 start=target & 0xFFFF,
                                                 entry_m=m, entry_x=xf))
         name = f"timing_case_{i}_M{case.get('m', 1)}X{case.get('xf', 0)}"
-        bodies.append(emit_function(bytes(rom), bank=pc >> 16,
-                                    start=pc & 0xFFFF,
-                                    entry_m=case.get("m", 1), entry_x=case.get("xf", 0),
-                                    func_name=f"timing_case_{i}"))
+        saved_instruction_timing = os.environ.get("SNESRECOMP_EMIT_INSTRUCTION_TIMING")
+        if case.get("instruction_timing"):
+            os.environ["SNESRECOMP_EMIT_INSTRUCTION_TIMING"] = (
+                f"{pc:06X}:{case.get('m', 1)}:{case.get('xf', 0)}")
+        try:
+            bodies.append(emit_function(bytes(rom), bank=pc >> 16,
+                                        start=pc & 0xFFFF,
+                                        entry_m=case.get("m", 1), entry_x=case.get("xf", 0),
+                                        func_name=f"timing_case_{i}"))
+        finally:
+            if saved_instruction_timing is None:
+                os.environ.pop("SNESRECOMP_EMIT_INSTRUCTION_TIMING", None)
+            else:
+                os.environ["SNESRECOMP_EMIT_INSTRUCTION_TIMING"] = saved_instruction_timing
         bodies.append(f"static const uint8_t code_{i}[] = {{" +
                       ",".join(str(x) for x in code) + "};")
         memory = case.get("memory", {})
@@ -89,13 +99,15 @@ def build(out: Path, cc: str, cases=None) -> Path:
         table.append(f"{{code_{i}, sizeof(code_{i}), {pc}, "
                      f"{case.get('m', 1)}, {case.get('xf', 0)}, {case.get('db', 0)}, "
                      f"{case.get('x', 0)}, {case.get('y', 0)}, {case.get('d', 0)}, "
-                     f"{case.get('memsel', 0)}, init_{i}, {len(memory)}, {name}" + "}")
+                     f"{case.get('memsel', 0)}, init_{i}, {len(memory)}, {name}, "
+                     f"{int(bool(case.get('instruction_timing')))}" + "}")
     header = """typedef struct TimingInit { uint32 address; uint8 value; } TimingInit;
 typedef struct TimingCase {
     const uint8_t *code; int size; uint32 pc;
     uint8 m, xf, db; uint16 x, y, d; uint8 memsel;
     const TimingInit *init; unsigned init_count;
     RecompReturn (*body)(CpuState *);
+    int instruction_timing;
 } TimingCase;
 """
     (out / "timing_cases.inc").write_text(

@@ -842,6 +842,11 @@ def emit_function(rom: bytes, bank: int, start: int,
         block_per_insn_ir[key] = pairs
         block_ir[key] = flat
 
+    instruction_timing = (
+        (bank << 16 | start, entry_m, entry_x) in bus_timing.instruction_targets())
+    if instruction_timing:
+        bus_timing.validate_instruction_leaf(block_per_insn_ir)
+
     # ── Non-local-return idiom detection ────────────────────────────────
     # A basic block is an NLR-block if its IR has the shape
     #   [<setup ops>] + [PullReg(A) × N] + (Goto | Return)
@@ -1374,7 +1379,8 @@ def emit_function(rom: bytes, bank: int, start: int,
 
     for key in block_order:
         block = cfg.blocks[key]
-        lines: List[str] = bus_timing.BusTimingLines() if bus_timing.enabled() else []
+        lines: List[str] = (bus_timing.InstructionTimingLines() if instruction_timing
+                           else bus_timing.BusTimingLines() if bus_timing.enabled() else [])
         block_terminated = False  # True if last op was branch/goto/return/call
         # Axis-5: master-clocks-per-CPU-cycle for this block's code region, used
         # to weight the dynamic (D.l/page-cross/branch-taken) master charges.
@@ -1499,7 +1505,9 @@ def emit_function(rom: bytes, bank: int, start: int,
                   f'skip_emit_idx={sorted(skip_emit_idx)}',
                   file=_sys.stderr, flush=True)
         for ii, (di_insn, ir_ops) in enumerate(pairs):
-            if bus_timing.enabled():
+            if instruction_timing:
+                lines.instruction(di_insn, _block_cycle_const([(di_insn, ir_ops)]))
+            elif bus_timing.enabled():
                 lines.instruction(di_insn)
             # NLR: inject _pending_skip setter + diagnostics RIGHT BEFORE
             # the terminator insn. This ensures any preceding setup ops
@@ -1541,7 +1549,7 @@ def emit_function(rom: bytes, bank: int, start: int,
             _audit_pc24 = getattr(
                 di_insn, 'addr', (bank << 16) | (key.pc & 0xFFFF))
             for _ln in _dynamic_charge_lines(
-                    di_insn, _blk_spd_expr, _audit_pc24):
+                    di_insn, _blk_spd_expr, None if instruction_timing else _audit_pc24):
                 lines.append(_ln)
             for op in ir_ops:
                 if isinstance(op, CondBranch):
@@ -1782,7 +1790,8 @@ def emit_function(rom: bytes, bank: int, start: int,
                                 )
                         block_terminated = True
                 elif isinstance(op, Return):
-                    for ln in emit_op(op, getattr(di_insn, 'addr', None)):
+                    for ln in emit_op(op, getattr(di_insn, 'addr', None),
+                                      instruction_commit=lines.commit() if instruction_timing else None):
                         lines.append(ln)
                     block_terminated = True
                 elif isinstance(op, IndirectGoto):
@@ -1993,6 +2002,8 @@ def emit_function(rom: bytes, bank: int, start: int,
                     # ReadReg, ALU, Read/Write, etc. — non-terminating.
                     for ln in emit_op(op, getattr(di_insn, 'addr', None)):
                         lines.append(ln)
+            if instruction_timing and di_insn.mnem not in ('RTS', 'RTL'):
+                lines.append(lines.commit())
         # NLR with no terminator IR (block IR was pure-PullReg, like
         # $01:A3CB's [PLA, PLA, fall-through]). The SKIP setter wasn't
         # injected during the per-insn loop because there was no
@@ -2152,6 +2163,12 @@ def emit_function(rom: bytes, bank: int, start: int,
             f'  if (rtl_aot_node_denied(0x{fn_entry_pc:06X}u)) {{ '
             f'RecompStackPop(); return interp_tier_dispatch_balanced('
             f'cpu, 0x{fn_entry_pc:06X}u, 0x{fn_entry_pc:06X}u, _entry_s, _hrv); }}')
+    if instruction_timing:
+        src.append(
+            f'  if (cpu->emulation) {{ RecompStackPop(); '
+            f'return interp_tier_dispatch_balanced(cpu, 0x{fn_entry_pc:06X}u, '
+            f'0x{fn_entry_pc:06X}u, _entry_s, _hrv); }} '
+            f'/* instruction timing currently supports native mode only */')
     src.append(f'  uint32 _host_return_pc24 = 0xFFFFFFFFu;')
     src.append(f'  if (_hrv == 2 || _hrv == 3) {{')
     src.append(f'    uint16 _host_rpcl = cpu_read8(cpu, 0x00, (uint16)(_entry_s + 1u));')
@@ -2163,6 +2180,8 @@ def emit_function(rom: bytes, bank: int, start: int,
     src.append(f'  (void)_entry_s;  /* used by trampoline balance check */')
     src.append(f'  (void)_hrv;')
     src.append(f'  (void)_host_return_pc24;')
+    if instruction_timing:
+        src.append('  CpuAotInstructionTiming _aot_timing;')
     # Record this frame's entry-S parallel to the recomp call stack so a
     # return-to-ancestor RTS (manual PLA/PLX/PLB rebalance + RTS) can be
     # resolved to a SKIP_N non-local return (cpu_resolve_ancestor_skip).
@@ -2202,7 +2221,7 @@ def emit_function(rom: bytes, bank: int, start: int,
         # Axis-5: also charge the region-weighted MASTER clocks (CPU cycles x
         # code-region speed) into cpu->master_cycles, which paces the SPC700.
         _cyc_const = _block_cycle_const(block_per_insn_ir.get(key, []))
-        if _cyc_const:
+        if _cyc_const and not instruction_timing:
             src.append(f'    cpu->cycles += {_cyc_const};')
             _spd_expr, _spd_const = _block_speed(bank, key.pc)
             if bus_timing.enabled():

@@ -83,6 +83,32 @@ def test_manifest_emitter_keeps_structural_target_as_lle(tmp_path):
     assert manifest["nodes"]["008010:M1X1"]["disposition"] == "lle_only"
 
 
+def test_instruction_timing_selection_invalidates_cache(tmp_path, monkeypatch):
+    rom, cfg, out = _fixture(tmp_path, target_opcode=0xEA)
+    monkeypatch.setenv('SNESRECOMP_EMIT_BUS_TIMING', '1')
+    monkeypatch.delenv('SNESRECOMP_EMIT_INSTRUCTION_TIMING', raising=False)
+    first = _run(rom, cfg, out)
+    assert first.returncode == 0, first.stdout + first.stderr
+    bank = out / 'bank00_v2.c'
+    original = bank.read_bytes()
+    monkeypatch.setenv('SNESRECOMP_EMIT_INSTRUCTION_TIMING', '008010:1:1')
+    selected = _run(rom, cfg, out)
+    assert selected.returncode == 0, selected.stdout + selected.stderr
+    assert b'CpuAotInstructionTiming _aot_timing;' in bank.read_bytes()
+    assert bank.read_bytes() != original
+    repeated = _run(rom, cfg, out)
+    assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+    assert 'reused verified published output' in repeated.stdout
+    monkeypatch.setenv('SNESRECOMP_EMIT_INSTRUCTION_TIMING', '008010:0:0')
+    other_width = _run(rom, cfg, out)
+    assert other_width.returncode == 0, other_width.stdout + other_width.stderr
+    assert bank.read_bytes() == original
+    monkeypatch.delenv('SNESRECOMP_EMIT_INSTRUCTION_TIMING')
+    restored = _run(rom, cfg, out)
+    assert restored.returncode == 0, restored.stdout + restored.stderr
+    assert bank.read_bytes() == original
+
+
 def test_all_lle_host_alias_still_links_to_authoritative_dispatch(tmp_path):
     rom_path, cfg_dir, out_dir = _fixture(tmp_path, target_opcode=0x00)
     (cfg_dir / "funcs.h").write_text(

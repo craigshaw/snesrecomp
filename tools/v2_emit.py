@@ -261,10 +261,12 @@ def main() -> int:
             "SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT"))
         event_precision = event_precision_profile_digest()
         bus_timing = bool(os.environ.get("SNESRECOMP_EMIT_BUS_TIMING"))
+        instruction_timing = os.environ.get("SNESRECOMP_EMIT_INSTRUCTION_TIMING", "")
         return hashlib.sha256(
             (f"{tree_digest}\0aot_deny_gate={int(deny_gate)}"
              f"\0event_crossing_audit={int(event_audit)}"
              f"\0bus_timing={int(bus_timing)}"
+             f"\0instruction_timing={instruction_timing}"
              f"\0event_precision={event_precision}").encode()
         ).hexdigest()
 

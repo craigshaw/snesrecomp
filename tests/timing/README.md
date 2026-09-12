@@ -137,3 +137,43 @@ These tests isolate three concerns: bus versus internal-cycle costs,
 instruction versus block write timing, and preservation of branch timing
 through optimisation. After a fix, retain these tests and rerun title-level
 frame/state comparisons before accepting additional AOT roots.
+
+## Opt-in native leaf instruction timing
+
+`SNESRECOMP_EMIT_INSTRUCTION_TIMING=008000:1:0,008100:0:1` selects exact
+generated entry keys as `HEXPC:M:X`. It requires
+`SNESRECOMP_EMIT_BUS_TIMING=1`. Both options participate in the output cache
+key. Unselected bodies retain the previous bus-accounting mode.
+
+This bounded implementation accepts a single straight-line block ending in
+RTS or RTL. Its preceding instructions can be NOP, LDA/LDX/LDY,
+STA/STX/STY/STZ with immediate, direct-page, absolute or long addressing,
+including their supported indexed forms. Unsupported selected bodies fail
+generation. Emulation-mode invocations use the interpreter. Calls, branches,
+stack manipulation, indirect addressing, RMW, RTI and block moves are outside
+this instruction-timing experiment.
+
+Each instruction accumulates costs locally while callbacks observe the
+instruction's start clock, matching the bridge convention. Return-frame
+reads finish before committing the return instruction. A shared bridge
+completion function advances CPU/master clocks, refresh accounting, beam and
+coprocessors, and the existing APU accumulator. Each next instruction checks
+the scheduler deadline and pending NMI before doing any work. An unwind
+retains the exact next PC and live guest stack for interpreter resumption.
+
+```sh
+python3 tests/timing/test_instruction_timing.py
+```
+
+This test runs 143 complete leaf comparisons, including write timestamps and
+byte order, and 32 real bridge scheduler exit/resume comparisons. It covers
+exact deadline boundaries, delayed-enable NMI, a simulated refresh delay and
+a simulated beam-triggered NMI. The event fixture also compares APU time
+accumulation. These peripheral hooks are test doubles, not hardware models.
+The shared C suite includes this test and checks that older timing modes
+keep their existing results.
+
+The supported instruction list is a bounded experiment, not a claim of
+general MMIO equivalence. APU-port handshakes, DMA, real peripheral timing,
+optimised calls and other control paths still need title-level validation.
+No new generation option is enabled by default.
