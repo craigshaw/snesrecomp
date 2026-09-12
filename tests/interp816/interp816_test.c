@@ -212,6 +212,31 @@ int main(void) {
     CHECK(cycles==6, "cycles=%d exp 6", cycles);
     CHECK(p->a==0x9ABC, "A=%04X exp 9ABC", p->a); }
 
+  /* T25: indexed writes include their internal cycle in the base cost.
+   * WDC W65C816S Tables 3-1/5-4: STA abs,X/Y and STZ abs,X take five
+   * cycles in M=1, STA (dp),Y takes six, and indexed RMW takes seven.
+   * Neither index width nor page crossing adds a second index cycle. */
+  { const uint8_t ops[] = {0x9D,0x99,0x9E,0x91,0x1E,0x3E,0x5E,0x7E,0xDE,0xFE};
+    printf("T25 indexed store/RMW cycles across M/X widths and page boundaries\n");
+    for (unsigned oi=0; oi<sizeof ops; ++oi)
+      for (int m=0; m<2; ++m)
+        for (int x=0; x<2; ++x)
+          for (int cross=0; cross<2; ++cross) {
+            uint16_t addr = cross ? 0x10FF : 0x1020;
+            uint8_t code[] = {ops[oi], (uint8_t)addr, (uint8_t)(addr>>8)};
+            if (ops[oi]==0x91) code[1]=0x40;
+            Interp816 *p = prep(code, sizeof code);
+            p->e=false; p->mf=m; p->xf=x; p->x=1; p->y=1;
+            MEM[0x40]=(uint8_t)addr; MEM[0x41]=(uint8_t)(addr>>8);
+            int rmw = oi>=4;
+            int expected = (rmw ? 7 : (ops[oi]==0x91 ? 6 : 5)) +
+                           (rmw ? 2 : 1)*(1-m);
+            int cycles = interp816_runOpcode(p);
+            CHECK(cycles==expected, "op=%02X M%dX%d cross=%d cycles=%d exp %d",
+                  ops[oi],m,x,cross,cycles,expected);
+          }
+  }
+
   printf("\n==== interp816 Phase-0: %d/%d checks passed ====\n", g_check - g_fail, g_check);
   if (g_fail) { printf("RESULT: FAIL (%d)\n", g_fail); return 1; }
   printf("RESULT: PASS\n");

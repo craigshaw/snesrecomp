@@ -121,6 +121,9 @@ def test_index_page_cross_modifier():
     assert _cyc(0xB1, index_page_cross=True) == 6   # LDA (dp),Y read +1
     assert _cyc(0x9D, index_page_cross=True) == 5   # STA abs,X store: no cross
     assert _cyc(0x91, index_page_cross=True) == 6   # STA (dp),Y store: no cross
+    for op in (0x1E, 0x3E, 0x5E, 0x7E, 0xDE, 0xFE):
+        assert _cyc(op, index_page_cross=True) == 7
+        assert _cyc(op, m=0, index_page_cross=True) == 9
     assert _cyc(0xBF, index_page_cross=True) == 5   # LDA long,X: never crosses
 
 

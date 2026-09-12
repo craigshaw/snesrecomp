@@ -283,8 +283,8 @@ def xcross_add(op: int) -> int:
     mn, mode = _info(op)
     if mode not in _XCROSS_MODES:
         return 0
-    if mn in _STORE_MNEMS:
-        return 0                        # stores pay a fixed cost, no cross add
+    if mn in _STORE_MNEMS or mn in _RMW_MNEMS:
+        return 0                        # writes pay a fixed cost, no cross add
     return 1
 
 

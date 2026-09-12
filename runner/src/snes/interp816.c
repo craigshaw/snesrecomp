@@ -365,8 +365,9 @@ static uint32_t interp816_adrIdy(Interp816* cpu, uint32_t* low, bool write) {
   if(cpu->dp & 0xff) cpu->cyclesUsed++; // dpr not 0: 1 extra cycle
   uint16_t pointer = interp816_readWord(cpu, (cpu->dp + adr) & 0xffff, (cpu->dp + adr + 1) & 0xffff);
   bool crossed = (pointer >> 8) != ((pointer + cpu->y) >> 8);
-  if(write ? (!cpu->xf || crossed) : crossed) cpu->cyclesUsed++;
-  // writes: x = 0 or page crossed; reads: page crossed
+  /* Store/RMW base costs already include the indexed internal cycle.
+   * Only reads add the conditional page-cross cycle here. */
+  if(!write && crossed) cpu->cyclesUsed++;
   *low = ((cpu->db << 16) + pointer + cpu->y) & 0xffffff;
   return ((cpu->db << 16) + pointer + cpu->y + 1) & 0xffffff;
 }
@@ -411,8 +412,9 @@ static uint32_t interp816_adrAbs(Interp816* cpu, uint32_t* low) {
 static uint32_t interp816_adrAbx(Interp816* cpu, uint32_t* low, bool write) {
   uint16_t adr = interp816_readOpcodeWord(cpu);
   bool crossed = (adr >> 8) != ((adr + cpu->x) >> 8);
-  if(write ? (!cpu->xf || crossed) : crossed) cpu->cyclesUsed++;
-  // writes: x = 0 or page crossed; reads: page crossed
+  /* Store/RMW base costs already include the indexed internal cycle.
+   * Only reads add the conditional page-cross cycle here. */
+  if(!write && crossed) cpu->cyclesUsed++;
   *low = ((cpu->db << 16) + adr + cpu->x) & 0xffffff;
   return ((cpu->db << 16) + adr + cpu->x + 1) & 0xffffff;
 }
@@ -420,8 +422,9 @@ static uint32_t interp816_adrAbx(Interp816* cpu, uint32_t* low, bool write) {
 static uint32_t interp816_adrAby(Interp816* cpu, uint32_t* low, bool write) {
   uint16_t adr = interp816_readOpcodeWord(cpu);
   bool crossed = (adr >> 8) != ((adr + cpu->y) >> 8);
-  if(write ? (!cpu->xf || crossed) : crossed) cpu->cyclesUsed++;
-  // writes: x = 0 or page crossed; reads: page crossed
+  /* Store/RMW base costs already include the indexed internal cycle.
+   * Only reads add the conditional page-cross cycle here. */
+  if(!write && crossed) cpu->cyclesUsed++;
   *low = ((cpu->db << 16) + adr + cpu->y) & 0xffffff;
   return ((cpu->db << 16) + adr + cpu->y + 1) & 0xffffff;
 }
