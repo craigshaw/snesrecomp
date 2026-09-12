@@ -1385,7 +1385,7 @@ def emit_function(rom: bytes, bank: int, start: int,
         # Axis-5: master-clocks-per-CPU-cycle for this block's code region, used
         # to weight the dynamic (D.l/page-cross/branch-taken) master charges.
         _blk_spd_expr, _blk_spd_const = _block_speed(bank, key.pc)
-        if bus_timing.enabled():
+        if instruction_timing or bus_timing.enabled():
             _blk_spd_expr, _blk_spd_const = "6", 6
         _event_audit = bool(
             os.environ.get('SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT'))
@@ -2071,7 +2071,7 @@ def emit_function(rom: bytes, bank: int, start: int,
 
     # Compose the function source with labels per block.
     src: List[str] = []
-    if bus_timing.enabled():
+    if instruction_timing or bus_timing.enabled():
         src.append('#include "snes/aot_bus_timing.h"')
     src.append(f"RecompReturn {func_name}(CpuState *cpu) {{")
     # Diagnostics — same call-stack plumbing v1 emitted, so the runtime

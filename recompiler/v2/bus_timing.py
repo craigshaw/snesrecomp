@@ -24,8 +24,6 @@ def instruction_targets():
             raise ValueError(f"{INSTRUCTION_ENV}: invalid exact entry key {item!r}")
         pc, m, x = item.split(":")
         result.add((int(pc, 16), int(m), int(x)))
-    if result and not enabled():
-        raise ValueError(f"{INSTRUCTION_ENV} requires SNESRECOMP_EMIT_BUS_TIMING")
     return frozenset(result)
 
 

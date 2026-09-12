@@ -141,9 +141,11 @@ frame/state comparisons before accepting additional AOT roots.
 ## Opt-in native leaf instruction timing
 
 `SNESRECOMP_EMIT_INSTRUCTION_TIMING=008000:1:0,008100:0:1` selects exact
-generated entry keys as `HEXPC:M:X`. It requires
-`SNESRECOMP_EMIT_BUS_TIMING=1`. Both options participate in the output cache
-key. Unselected bodies retain the previous bus-accounting mode.
+generated entry keys as `HEXPC:M:X`. It works independently of
+`SNESRECOMP_EMIT_BUS_TIMING`. Both options participate in the output cache
+key. With the global bus option absent, unselected bodies retain their
+original generated code. This permits a one-body comparison against the
+interpreter without also changing the timing of existing AOT coverage.
 
 This bounded implementation accepts a single straight-line block ending in
 RTS or RTL. Its preceding instructions can be NOP, LDA/LDX/LDY,
@@ -166,7 +168,8 @@ python3 tests/timing/test_instruction_timing.py
 ```
 
 This test runs 143 complete leaf comparisons, including write timestamps and
-byte order, and 32 real bridge scheduler exit/resume comparisons. It covers
+byte order, and 32 real bridge scheduler exit/resume comparisons in each of
+two modes: with and without the global bus option. It covers
 exact deadline boundaries, delayed-enable NMI, a simulated refresh delay and
 a simulated beam-triggered NMI. The event fixture also compares APU time
 accumulation. These peripheral hooks are test doubles, not hardware models.

@@ -14,6 +14,12 @@ from v2 import bus_timing
 
 class InstructionTiming(unittest.TestCase):
     def test_leaf_writes_and_events(self):
+        self.check_leaf_writes_and_events(global_bus_timing=True)
+
+    def test_leaf_writes_and_events_without_global_bus_timing(self):
+        self.check_leaf_writes_and_events(global_bus_timing=False)
+
+    def check_leaf_writes_and_events(self, global_bus_timing):
         cases = [c for c in timing.CASES if "branch" not in c["name"]]
         cases += [c for c in memory_cases() if c['name'].split('-')[0] in
                   ('dp', 'dpx', 'abs', 'absx', 'absy', 'long', 'longx')]
@@ -38,7 +44,8 @@ class InstructionTiming(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="snes-leaf-timing-") as temp, patch.dict(
                 os.environ, {k: v for k, v in os.environ.items()
                              if not k.startswith("SNESRECOMP_")}, clear=True):
-            os.environ["SNESRECOMP_EMIT_BUS_TIMING"] = "1"
+            if global_bus_timing:
+                os.environ["SNESRECOMP_EMIT_BUS_TIMING"] = "1"
             os.environ["SNESRECOMP_EMIT_EVENT_CROSSING_AUDIT"] = "1"
             out = Path(temp)
             binary = timing.build(out, os.environ.get("CC", "cc"), cases)
@@ -108,8 +115,8 @@ class InstructionTiming(unittest.TestCase):
                     bus_timing.instruction_targets()
             os.environ[bus_timing.INSTRUCTION_ENV] = "008000:1:0"
             os.environ["SNESRECOMP_EMIT_BUS_TIMING"] = ""
-            with self.assertRaises(ValueError):
-                bus_timing.instruction_targets()
+            self.assertEqual(bus_timing.instruction_targets(),
+                             frozenset({(0x008000, 1, 0)}))
 
 
 if __name__ == '__main__':

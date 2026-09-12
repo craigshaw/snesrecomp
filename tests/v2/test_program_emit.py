@@ -84,8 +84,19 @@ def test_manifest_emitter_keeps_structural_target_as_lle(tmp_path):
 
 
 def test_instruction_timing_selection_invalidates_cache(tmp_path, monkeypatch):
+    _check_instruction_timing_cache(tmp_path, monkeypatch, False)
+
+
+def test_instruction_timing_selection_with_global_bus_invalidates_cache(tmp_path, monkeypatch):
+    _check_instruction_timing_cache(tmp_path, monkeypatch, True)
+
+
+def _check_instruction_timing_cache(tmp_path, monkeypatch, global_bus_timing):
     rom, cfg, out = _fixture(tmp_path, target_opcode=0xEA)
-    monkeypatch.setenv('SNESRECOMP_EMIT_BUS_TIMING', '1')
+    if global_bus_timing:
+        monkeypatch.setenv('SNESRECOMP_EMIT_BUS_TIMING', '1')
+    else:
+        monkeypatch.delenv('SNESRECOMP_EMIT_BUS_TIMING', raising=False)
     monkeypatch.delenv('SNESRECOMP_EMIT_INSTRUCTION_TIMING', raising=False)
     first = _run(rom, cfg, out)
     assert first.returncode == 0, first.stdout + first.stderr
