@@ -17,6 +17,38 @@ from v2.emit_function import emit_function  # noqa: E402
 _STATIC_CHARGE = re.compile(r'^\s*cpu->cycles \+= (\d+);\s*$', re.M)
 
 
+def test_selected_bus_costs_match_global_and_do_not_leak():
+    # Indexed read, MMIO write and return cover nested codegen timing helpers.
+    rom = make_lorom_bank0({0x8000: bytes([0xBD, 0x34, 0x12, 0x8D, 0, 0x42, 0x6B])})
+    from v2 import bus_timing
+    with patch.dict(os.environ, {}, clear=True):
+        ordinary = emit_function(rom, 0, 0x8000, 1, 0)
+        os.environ[bus_timing.BUS_TARGETS_ENV] = '008000:1:0'
+        selected = emit_function(rom=rom, bank=0, start=0x8000, entry_m=1, entry_x=0)
+        assert not bus_timing.enabled()
+        assert selected != ordinary
+        assert 'CpuAotInstructionTiming _aot_timing;' not in selected
+        for key in ('008000:0:0', '008000:1:1', '018000:1:0', '008001:1:0'):
+            os.environ[bus_timing.BUS_TARGETS_ENV] = key
+            assert emit_function(rom, 0, 0x8000, 1, 0) == ordinary
+        os.environ['SNESRECOMP_EMIT_BUS_TIMING'] = '1'
+        assert emit_function(rom, 0, 0x8000, 1, 0) == selected
+
+
+def test_selected_bus_scope_is_restored_after_emission_error():
+    from v2 import bus_timing
+    rom = make_lorom_bank0({0x8000: bytes([0xEA, 0x6B])})
+    with patch.dict(os.environ, {bus_timing.BUS_TARGETS_ENV: '008000:1:0'}, clear=True):
+        with patch('v2.emit_function.decode_function', side_effect=RuntimeError('decode failed')):
+            try:
+                emit_function(rom, 0, 0x8000, 1, 0)
+            except RuntimeError as exc:
+                assert str(exc) == 'decode failed'
+            else:
+                assert False, 'expected decode error'
+        assert not bus_timing.enabled()
+
+
 def test_linear_block_charges_static_cycles():
     # LDA #$05 (2) ; STA $00 (dp, 3) ; RTS (6) -> one block, 11 static cycles
     # (plus a runtime D.l!=0 dynamic charge for the dp store).

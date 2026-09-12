@@ -102,9 +102,14 @@ manual return-frame manipulation or validate all optimised call/dispatch
 trampolines and omitted stack operations.
 
 For actual generation, `SNESRECOMP_EMIT_BUS_TIMING=1` enables the experimental
-path. The option participates in the generation-cache key, together with the
-shared instruction/cycle model sources. With the option absent, generated
-code retains block costs at code-region speed. The indexed-write cycle
+path globally. `SNESRECOMP_EMIT_BUS_TIMING_TARGETS=008000:1:0,018100:0:0`
+instead selects exact `(PC, M, X)` entries. This selection scopes the existing
+bus-cost implementation to each complete emitted function, including nested
+codegen helpers. It does not enable instruction timing. Entries selected by
+`SNESRECOMP_EMIT_INSTRUCTION_TIMING` still use that mode when both lists overlap.
+Malformed bus entry keys fail generation, and selection changes invalidate
+the generation cache. Unselected entries retain block costs at code-region
+speed when the global option is absent. The indexed-write cycle
 corrections apply independently of this option in the generator/interpreter.
 
 Enabled generation precharges six master clocks for each CPU cycle and adds

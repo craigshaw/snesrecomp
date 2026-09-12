@@ -475,6 +475,7 @@ def scan_rts_stack_deltas(
     return next(iter(rts_deltas))
 
 
+@bus_timing.scope_function
 def emit_function(rom: bytes, bank: int, start: int,
                   entry_m: int, entry_x: int,
                   *, end: Optional[int] = None,

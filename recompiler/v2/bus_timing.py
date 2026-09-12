@@ -6,10 +6,16 @@ host prologue inspection reads outside this transformation.
 """
 import os
 import re
+from contextvars import ContextVar
+from functools import wraps
+
+
+BUS_TARGETS_ENV = "SNESRECOMP_EMIT_BUS_TIMING_TARGETS"
+_selected_bus_timing = ContextVar("selected_bus_timing", default=False)
 
 
 def enabled():
-    return bool(os.environ.get("SNESRECOMP_EMIT_BUS_TIMING"))
+    return bool(os.environ.get("SNESRECOMP_EMIT_BUS_TIMING")) or _selected_bus_timing.get()
 
 
 INSTRUCTION_ENV = "SNESRECOMP_EMIT_INSTRUCTION_TIMING"
@@ -17,14 +23,36 @@ INSTRUCTION_ENV = "SNESRECOMP_EMIT_INSTRUCTION_TIMING"
 
 def instruction_targets():
     """Explicit native leaf entry keys, written as HEXPC:M:X, comma separated."""
-    value = os.environ.get(INSTRUCTION_ENV, "")
+    return _targets(INSTRUCTION_ENV)
+
+
+def bus_targets():
+    """Exact entries using bus costs with the existing block timing model."""
+    return _targets(BUS_TARGETS_ENV)
+
+
+def _targets(env_name):
+    value = os.environ.get(env_name, "")
     result = set()
     for item in value.split(",") if value else ():
         if not re.fullmatch(r"[0-9A-Fa-f]{6}:[01]:[01]", item):
-            raise ValueError(f"{INSTRUCTION_ENV}: invalid exact entry key {item!r}")
+            raise ValueError(f"{env_name}: invalid exact entry key {item!r}")
         pc, m, x = item.split(":")
         result.add((int(pc, 16), int(m), int(x)))
     return frozenset(result)
+
+
+def scope_function(emitter):
+    """Keep the exact entry selection active through nested codegen helpers."""
+    @wraps(emitter)
+    def scoped(rom, bank, start, entry_m, entry_x, **kwargs):
+        key = (((bank & 0xFF) << 16) | (start & 0xFFFF), entry_m, entry_x)
+        token = _selected_bus_timing.set(key in bus_targets())
+        try:
+            return emitter(rom, bank, start, entry_m, entry_x, **kwargs)
+        finally:
+            _selected_bus_timing.reset(token)
+    return scoped
 
 
 def validate_instruction_leaf(block_pairs, cfg):

@@ -61,6 +61,35 @@ def test_bus_timing_option_invalidates_generation_cache(tmp_path, monkeypatch):
     assert bank_path.read_bytes() == legacy
 
 
+def test_selected_bus_timing_invalidates_cache(tmp_path, monkeypatch):
+    rom, cfg, out = _fixture(tmp_path, target_opcode=0xEA)
+    env_name = 'SNESRECOMP_EMIT_BUS_TIMING_TARGETS'
+    monkeypatch.delenv('SNESRECOMP_EMIT_BUS_TIMING', raising=False)
+    monkeypatch.delenv(env_name, raising=False)
+    first = _run(rom, cfg, out)
+    assert first.returncode == 0, first.stdout + first.stderr
+    bank = out / 'bank00_v2.c'
+    ordinary = bank.read_bytes()
+    monkeypatch.setenv(env_name, '008010:1:1')
+    selected = _run(rom, cfg, out)
+    assert selected.returncode == 0, selected.stdout + selected.stderr
+    assert bank.read_bytes() != ordinary
+    assert b'cpu_aot_fetch_extra(cpu, 0x008010u' in bank.read_bytes()
+    assert b'cpu_aot_fetch_extra(cpu, 0x008000u' not in bank.read_bytes()
+    repeated = _run(rom, cfg, out)
+    assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+    assert 'reused verified published output' in repeated.stdout
+    monkeypatch.setenv(env_name, '008010:0:0')
+    other_width = _run(rom, cfg, out)
+    assert other_width.returncode == 0, other_width.stdout + other_width.stderr
+    assert bank.read_bytes() == ordinary
+    monkeypatch.setenv(env_name, '008010')
+    invalid = _run(rom, cfg, out)
+    assert invalid.returncode != 0
+    assert env_name + ': invalid exact entry key' in invalid.stderr
+    assert bank.read_bytes() == ordinary
+
+
 def test_manifest_emitter_keeps_structural_target_as_lle(tmp_path):
     rom_path, cfg_dir, out_dir = _fixture(tmp_path, target_opcode=0x00)
     result = _run(rom_path, cfg_dir, out_dir)
