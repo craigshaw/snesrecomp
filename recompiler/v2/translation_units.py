@@ -73,6 +73,11 @@ def split_bank_translation_units(
         raise ValueError(
             f"bank ${bank:02X}: emitted source lacks forward declarations")
     include_preamble = preamble[:marker].rstrip() + "\n\n"
+    # Timing headers can precede individual emitted functions. Sharding by
+    # function signature otherwise leaves that include in the previous shard.
+    timing_header = '#include "snes/aot_bus_timing.h"'
+    if timing_header in source and timing_header not in include_preamble:
+        include_preamble += timing_header + "\n\n"
 
     chunks: dict[int, list[str]] = {}
     for index, match in enumerate(matches):

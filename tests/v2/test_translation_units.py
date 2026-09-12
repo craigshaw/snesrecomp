@@ -60,6 +60,22 @@ def test_shard_embeds_only_referenced_variant_declarations():
     assert "bank_00_8000_M1X1(CpuState *cpu);" not in part1_preamble
 
 
+def test_shards_keep_timing_header_attached_to_later_function():
+    header = '#include "snes/aot_bus_timing.h"'
+    source = SOURCE.replace(
+        'RecompReturn bank_00_8800_M1X1(CpuState *cpu) {',
+        header + '\nRecompReturn bank_00_8800_M1X1(CpuState *cpu) {\n'
+        '  CpuAotInstructionTiming timing = {0, 0};')
+    parts = split_bank_translation_units(
+        source, 0, SYMBOL_PCS, threshold_bytes=0, pc_span=0x800)
+    for part in parts.values():
+        assert header in part.split('/* Split translation unit:', 1)[0]
+    # The normal monolithic path must not change its established output.
+    unsplit = split_bank_translation_units(
+        source, 0, SYMBOL_PCS, threshold_bytes=len(source) + 1, pc_span=0x800)
+    assert unsplit['bank00_v2.c'].count(header) == 1
+
+
 def test_small_bank_keeps_monolithic_filename_and_adds_call_declarations():
     parts = split_bank_translation_units(
         SOURCE, 0, SYMBOL_PCS, threshold_bytes=len(SOURCE) + 1,
