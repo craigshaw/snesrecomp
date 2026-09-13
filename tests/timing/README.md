@@ -162,6 +162,19 @@ generation. Emulation-mode invocations use the interpreter. Calls, external
 branches, stack manipulation, indirect addressing, RMW, RTI and block moves are outside
 this instruction-timing experiment.
 
+Selected leaves also accept AND, EOR and BIT in the supported data addressing
+modes, accumulator INC, CLC, DEY, TYA, XBA, and REP/SEP when their mask does not
+change X. The accumulator width may change inside the leaf. Index-width
+changes still fail generation: the existing generic SEP path does not yet
+clear both index-register high bytes at the required boundary. This extension
+does not enable that path or change unselected output.
+
+`python3 tests/timing/test_status_instruction_timing.py` checks 29 complete
+synthetic executions and 38 scheduler stop/resume comparisons. It covers
+accumulator-width changes, retained high bytes, logical and register operations,
+BIT flag differences, IRQ masking and independently calculated width-change
+clock budgets. The shared C suite includes it.
+
 Each instruction accumulates costs locally while callbacks observe the
 instruction's start clock, matching the bridge convention. Return-frame
 reads finish before committing the return instruction. A shared bridge

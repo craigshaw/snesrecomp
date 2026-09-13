@@ -56,7 +56,7 @@ def scope_function(emitter):
 
 
 def validate_instruction_leaf(block_pairs, cfg):
-    """Accept native leaves with local control flow and tested arithmetic."""
+    """Accept native leaves with tested control flow, arithmetic and status."""
     from snes65816 import (IMP, ACC, IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X,
                           DP, DP_X, DP_Y, REL, REL16)
     data_modes = (IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X, DP, DP_X, DP_Y)
@@ -72,10 +72,15 @@ def validate_instruction_leaf(block_pairs, cfg):
             raise ValueError("instruction timing requires a final RTS or RTL")
         for insn, _ in pairs:
             supported = (
-                (insn.mnem in ("RTS", "RTL", "NOP") and insn.mode == IMP)
+                (insn.mnem in ("RTS", "RTL", "NOP", "CLC", "DEY", "TYA", "XBA")
+                 and insn.mode == IMP)
+                # Index-width changes need separate narrowing/resume support.
+                or (insn.mnem in ("REP", "SEP") and insn.mode == IMM
+                    and not (insn.operand & 0x10))
                 or (insn.mnem in ("LDA", "LDX", "LDY", "STA", "STX", "STY", "STZ",
-                                  "CMP", "ADC") and insn.mode in data_modes)
-                or (insn.mnem == "ASL" and insn.mode == ACC)
+                                  "CMP", "ADC", "AND", "EOR", "BIT")
+                    and insn.mode in data_modes)
+                or (insn.mnem in ("ASL", "INC") and insn.mode == ACC)
                 or (insn.mnem in branches and insn.mode in (REL, REL16)))
             if not supported:
                 raise ValueError(f"instruction timing does not yet support {insn.mnem} at {insn.addr:06X}")
