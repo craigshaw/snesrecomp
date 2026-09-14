@@ -45,6 +45,7 @@ TEST_MODULES = [
     'test_v2_emit_lint',
     'test_nlr_idiom',
     'test_dispatcher_phk_per_jml',
+    'test_direct_long_call_trampolines',
     'test_indirect_dispatch_parallel_tables',
     'test_pointer_target_dispatch',
     'test_indirect_jsr_dispatch_continuation',
