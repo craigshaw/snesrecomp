@@ -1,0 +1,48 @@
+name: PPU alignment
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/ppu-alignment.yml'
+      - 'runner/src/types.h'
+      - 'runner/src/snes/**'
+      - 'tests/ppu/**'
+  pull_request:
+    paths:
+      - '.github/workflows/ppu-alignment.yml'
+      - 'runner/src/types.h'
+      - 'runner/src/snes/**'
+      - 'tests/ppu/**'
+
+permissions:
+  contents: read
+
+jobs:
+  alignment:
+    name: ${{ matrix.name }} (C and C++)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows MSVC
+            os: windows-latest
+            options: ''
+          - name: Linux GCC
+            os: ubuntu-latest
+            options: '-DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++'
+          - name: Linux Clang
+            os: ubuntu-latest
+            options: '-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++'
+          - name: macOS Apple Clang
+            os: macos-latest
+            options: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure
+        run: cmake -S tests/ppu/alignment -B build/ppu-alignment ${{ matrix.options }}
+      - name: Build
+        run: cmake --build build/ppu-alignment --config Release
+      - name: Test
+        run: ctest --test-dir build/ppu-alignment -C Release --output-on-failure

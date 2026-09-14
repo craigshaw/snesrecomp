@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.20)
+project(ppu_alignment_tests LANGUAGES C CXX)
+
+enable_testing()
+get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+set(TEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../ppu_alignment_test.c")
+configure_file("${TEST_SOURCE}" "${CMAKE_CURRENT_BINARY_DIR}/ppu_alignment_test.cpp" COPYONLY)
+
+add_executable(ppu_alignment_c "${TEST_SOURCE}")
+add_executable(ppu_alignment_cxx "${CMAKE_CURRENT_BINARY_DIR}/ppu_alignment_test.cpp")
+set_target_properties(ppu_alignment_c PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+set_target_properties(ppu_alignment_cxx PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
+foreach(target ppu_alignment_c ppu_alignment_cxx)
+    target_include_directories(${target} PRIVATE "${REPO_ROOT}/runner/src")
+    add_test(NAME ${target} COMMAND ${target})
+endforeach()

@@ -66,7 +66,13 @@ typedef struct PpuWsElasticSeg {
 
 typedef uint16_t PpuZbufType;
 
-typedef struct PpuPixelPrioBufs {
+#if defined(_MSC_VER)
+#define PPU_ALIGN8 __declspec(align(8))
+#else
+#define PPU_ALIGN8 __attribute__((aligned(8)))
+#endif
+
+typedef struct PPU_ALIGN8 PpuPixelPrioBufs {
   // This holds the prio in the upper 8 bits and the color in the lower 8 bits.
   // Sized for the widescreen border; logical screen x maps to
   // data[x + kPpuExtraLeftRight].
@@ -76,7 +82,9 @@ typedef struct PpuPixelPrioBufs {
   // offset aborts on ARM -- and which ones do shifts whenever a field
   // above them grows.
   PpuZbufType data[kPpuBufWidth];
-} __attribute__((aligned(8))) PpuPixelPrioBufs;
+} PpuPixelPrioBufs;
+
+#undef PPU_ALIGN8
 
 static inline void PpuWidescreenAdjustPinnedWindowEdges(
     int screen_left, int screen_right, int *w1l, int *w1r, int *w2l,

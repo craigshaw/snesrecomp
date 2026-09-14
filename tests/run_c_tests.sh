@@ -30,6 +30,16 @@ echo "=== launcher ==="
     -o "$OUT/launcher_test"
 "$OUT/launcher_test"
 
+echo "=== PPU alignment (C and C++) ==="
+"$CC" -std=c11 -Wall -Wextra -Werror -O1 \
+    -I "$ROOT/runner/src" "$ROOT/tests/ppu/ppu_alignment_test.c" \
+    -o "$OUT/ppu_alignment_test"
+"$OUT/ppu_alignment_test"
+"${CXX:-g++}" -std=c++17 -Wall -Wextra -Werror -O1 -x c++ \
+    -I "$ROOT/runner/src" "$ROOT/tests/ppu/ppu_alignment_test.c" \
+    -o "$OUT/ppu_alignment_cxx_test"
+"$OUT/ppu_alignment_cxx_test"
+
 echo "=== PPU sprite limits ==="
 "$CC" -std=c11 -Wall -Wextra -O1 \
     -DSNESRECOMP_REVERSE_DEBUG=0 \
