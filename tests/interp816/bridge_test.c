@@ -846,6 +846,19 @@ int main(void) {
             "resume=$%06X exp $008000 (re-read wait source)",
             (unsigned)interp_bridge_lle_resume_pc()); }
 
+    /* The S-DD1-specific low-WRAM rule must still prevent a false yield. */
+    { memset(RAM, 0, MEMSZ); init_cpu();
+      Cart cart = {0};
+      cart.type = CART_SDD1;
+      g_test_snes.cart = &cart;
+      uint8_t c[] = {0xAD,0x20,0x00,0xF0,0xFB};
+      load(0x8000, c, sizeof c);
+      int rc = interp_bridge_run_until_quiescent(&g_c, 0x008000);
+      printf("S10c S-DD1 low-WRAM reads retain their dynamic policy\n");
+      CHECK(rc == 0, "rc=%d exp 0 (no quiescent yield)", rc);
+      g_test_snes.cart = NULL;
+      interp_bridge_reset_dynamic_cache(); }
+
     /* S11: a dispatch-table row with no exact AOT M/X body is a known LLE
      * entry, not a mid-caller continuation.  cpu_dispatch_pc_from invokes
      * this bridge after the prior RTS already popped, so the current S is the

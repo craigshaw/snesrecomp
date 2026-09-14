@@ -182,10 +182,11 @@ static int bridge_continuous_read(uint32_t adr) {
     /* Devices in these windows advance from CPU/master time or from the read
      * protocol itself. Repeating CPU registers around such a read is not a
      * quiescent interrupt wait: keep executing so the device can answer. */
-    /* Zero-page and direct-page reads are used by S-DD1 decompression
-     * loops and other game logic that must not be mistaken for quiescent
-     * polling.  Mark them dynamic so the epoch advances. */
-    if (a < 0x2000) return 1;
+    /* Preserve the S-DD1 decompression workaround only on that cartridge.
+     * Ordinary WRAM can hold an interrupt-owned wait flag; treating every
+     * read as device progress prevents those loops from yielding. */
+    if (a < 0x2000 && g_snes && g_snes->cart &&
+        g_snes->cart->type == CART_SDD1) return 1;
     if (a>=0x2134 && a<0x2180) return 1;       /* PPU counters + APU ports */
     if (a>=0x3000 && a<0x3300) return 1;       /* GSU registers/cache */
     if (a==0x4016 || a==0x4017 || a==0x4212) return 1;
@@ -1416,12 +1417,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         if (auto_quiescent) {
             QuiescentState now;
             memset(&now, 0, sizeof now);
-            /* The captured architectural state is AFTER the instruction just
-             * executed, so its matching PC is the interpreter's next PC, not
-             * pc_before. This matters for a two-instruction hardware poll:
-             * after the taken branch the CPU is parked on the register read.
-             * Resuming at the branch would skip that read after NMI/IRQ and
-             * stack the wrong interrupted PC. */
+            /* Capture matching PC and register state at this instruction
+             * boundary. On a stable cycle, resume at its poll read so an
+             * interrupt can change the sampled value before the branch. */
             now.pc=((uint32_t)in.k << 16) | in.pc;
             now.a=in.a; now.x=in.x; now.y=in.y;
             now.sp=in.sp; now.dp=in.dp; now.db=in.db; now.k=in.k;
