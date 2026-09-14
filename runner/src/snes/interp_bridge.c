@@ -1416,7 +1416,14 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         if (auto_quiescent) {
             QuiescentState now;
             memset(&now, 0, sizeof now);
-            now.pc=pc_before; now.a=in.a; now.x=in.x; now.y=in.y;
+            /* The captured architectural state is AFTER the instruction just
+             * executed, so its matching PC is the interpreter's next PC, not
+             * pc_before. This matters for a two-instruction hardware poll:
+             * after the taken branch the CPU is parked on the register read.
+             * Resuming at the branch would skip that read after NMI/IRQ and
+             * stack the wrong interrupted PC. */
+            now.pc=((uint32_t)in.k << 16) | in.pc;
+            now.a=in.a; now.x=in.x; now.y=in.y;
             now.sp=in.sp; now.dp=in.dp; now.db=in.db; now.k=in.k;
             now.c=in.c; now.z=in.z; now.v=in.v; now.n=in.n; now.i=in.i;
             now.d=in.d; now.mf=in.mf; now.xf=in.xf; now.e=in.e;
@@ -1444,7 +1451,34 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                          * and could starve rendering.  Live MMIO polls are not
                          * mistaken for this path: continuous_read_epoch changes
                          * on every such read. */
-                        s_lle_resume_pc24=pc_before;
+                        /* Resume at the head of the observed cycle. Depending
+                         * on which state repeats first, detection lands either
+                         * on the register read itself or on its taken backward
+                         * branch. Re-execute the read in both cases so the
+                         * asynchronous device value refreshes A/P. */
+                        uint8_t qop, qrel;
+                        /* Peek through the interpreter bus, then restore the
+                         * CPU data latch so inspection itself is
+                         * architecturally invisible. Executable RAM and test
+                         * fixtures work without a separate ROM mapping. */
+                        const uint8_t saved_open_bus = cpu->open_bus;
+                        qop = in.read(in.mem, pc_before);
+                        qrel = in.read(in.mem,
+                            (pc_before & 0xFF0000u) |
+                            (uint16_t)((uint16_t)pc_before + 1u));
+                        cpu->open_bus = saved_open_bus;
+                        const int branch_op =
+                            qop == 0x10 || qop == 0x30 || qop == 0x50 ||
+                            qop == 0x70 || qop == 0x80 || qop == 0x90 ||
+                            qop == 0xB0 || qop == 0xD0 || qop == 0xF0;
+                        if (branch_op && (int8_t)qrel < 0) {
+                            const uint16_t target = (uint16_t)(
+                                (uint16_t)pc_before + 2u + (int8_t)qrel);
+                            s_lle_resume_pc24 =
+                                (pc_before & 0xFF0000u) | target;
+                        } else {
+                            s_lle_resume_pc24 = pc_before;
+                        }
                         s_lle_quiescent_yield = 1;
                         /* Flush accumulated SPC time BEFORE yielding so the
                          * SPC700 processes any pending port writes (Star Ocean

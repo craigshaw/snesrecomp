@@ -828,6 +828,24 @@ int main(void) {
       CHECK(rc2 == 1, "second rc=%d exp 1 (input observed)", rc2);
       CHECK(g_c.S == 0x01FF, "return S=%04X exp 01FF (balanced)", g_c.S); }
 
+    /* S10b: auto-quiescent state is sampled after each opcode. A stable
+     * read/branch loop must resume at the next architectural PC (the read),
+     * not at the branch opcode that just executed. Otherwise an interrupt
+     * wakes the loop without re-reading the newly changed hardware value. */
+    { memset(RAM, 0, MEMSZ); init_cpu();
+      uint8_t c[] = {
+          0xAD,0x20,0x00,                    /* LDA $20 */
+          0xF0,0xFB                         /* BEQ $8000 */
+      };
+      load(0x8000, c, sizeof c);
+      RAM[0x20] = 0;
+      int rc = interp_bridge_run_until_quiescent(&g_c, 0x008000);
+      printf("S10b auto-quiescent resumes at post-branch PC\n");
+      CHECK(rc == 1, "rc=%d exp 1", rc);
+      CHECK(interp_bridge_lle_resume_pc() == 0x008000,
+            "resume=$%06X exp $008000 (re-read wait source)",
+            (unsigned)interp_bridge_lle_resume_pc()); }
+
     /* S11: a dispatch-table row with no exact AOT M/X body is a known LLE
      * entry, not a mid-caller continuation.  cpu_dispatch_pc_from invokes
      * this bridge after the prior RTS already popped, so the current S is the

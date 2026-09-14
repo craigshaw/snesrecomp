@@ -194,6 +194,11 @@ echo "=== Super Multitap protocol ==="
 "$OUT/multitap_test"
 
 echo "=== runtime dispatch ==="
+"$CC" -std=c11 -Wall -Wextra -Werror -O1 \
+    -I "$ROOT/runner/src/snes" \
+    "$ROOT/tests/runtime_dispatch/rdnmi_open_bus_test.c" \
+    -o "$OUT/rdnmi_open_bus_test"
+"$OUT/rdnmi_open_bus_test"
 "$CC" -std=c11 -Wall -Wextra -ffunction-sections -fdata-sections \
     -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
     "$ROOT/tests/runtime_dispatch/known_lle_entry_test.c" \

@@ -1479,7 +1479,10 @@ uint8 ReadRegOpenBus(uint16 reg, uint8 open_bus) {
      * ArePluggedIn detection. */
     return snes_readReg(g_snes, reg);
   } else if (reg >= 0x4200 && reg < 0x4220) {
-    return recomp_read_internal_reg(reg);
+    uint8 value = recomp_read_internal_reg(reg);
+    if (reg == RDNMI)
+      value = snes_rdnmi_merge_open_bus(value, open_bus);
+    return value;
   } else if (reg >= 0x4300 && reg < 0x4380) {
     return dma_read(g_dma, reg);
   } else if (reg >= 0x4800 && reg < 0x4808 &&
