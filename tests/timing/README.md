@@ -251,3 +251,11 @@ with direct tails. It compares 48 complete executions and 3,168 event/resume
 cases in each bus-option mode, including same-bank and cross-bank transfers,
 compiled, missing and disabled targets, both accumulator and index widths,
 SlowROM/FastROM, skipped tails, NMI, IRQ and refresh.
+# Index compare and increment
+
+Selected instruction timing supports CPX immediate, direct-page and absolute,
+and INX. `test_index_instruction_timing.py` compares both register widths,
+comparison flags, index wrap, direct-page penalties and a repeated indexed-store
+loop with the real interpreter. It checks 50 complete executions and 716
+deadline, refresh, NMI and IRQ stop/resume pairs. It does not enable stack
+instructions or external short branches.

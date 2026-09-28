@@ -87,7 +87,7 @@ def validate_instruction_leaf(block_pairs, cfg):
                                    and not op.terminal and not op.noreturn
                                    and op.target is not None for op in ops))
             supported = (
-                (insn.mnem in ("RTS", "RTL", "NOP", "CLC", "DEY", "TYA", "XBA")
+                (insn.mnem in ("RTS", "RTL", "NOP", "CLC", "DEY", "INX", "TYA", "XBA")
                  and insn.mode == IMP)
                 # Index-width changes need separate narrowing/resume support.
                 or (insn.mnem in ("REP", "SEP") and insn.mode == IMM
@@ -96,6 +96,7 @@ def validate_instruction_leaf(block_pairs, cfg):
                                   "CMP", "ADC", "AND", "EOR", "BIT")
                     and insn.mode in data_modes)
                 or (insn.mnem == "ORA" and insn.mode == IMM)
+                or (insn.mnem == "CPX" and insn.mode in (IMM, DP, ABS))
                 or (insn.mnem in ("ASL", "INC") and insn.mode == ACC)
                 or (insn.mnem in branches and insn.mode in (REL, REL16))
                 or direct_call or direct_long_tail(insn, ops))
