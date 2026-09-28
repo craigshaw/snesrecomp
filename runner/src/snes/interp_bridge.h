@@ -77,6 +77,10 @@ int interp_bridge_run(CpuState *cpu, uint32_t entry_pc24);
 void interp_bridge_commit_instruction(CpuState *cpu, unsigned cycles,
                                       uint64_t master);
 
+/* Generated instruction-timed reads advance the beam at opcode completion.
+ * Scoped by aot_bus_timing.h so MMIO must not add a legacy polling tick. */
+extern int g_aot_instruction_read_active;
+
 /* Faithful LLE of an infinite cooperative-scheduler loop (e.g. MMX's $8099 task
  * scheduler): run the real ROM scheduler under interp816 from entry_pc24 and
  * yield after one frame's slot walk — when it reaches yield_pc (its vblank-wait

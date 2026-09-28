@@ -87,8 +87,10 @@ def validate_instruction_leaf(block_pairs, cfg):
                                    and not op.terminal and not op.noreturn
                                    and op.target is not None for op in ops))
             supported = (
-                (insn.mnem in ("RTS", "RTL", "NOP", "CLC", "DEY", "INX", "TYA", "XBA")
+                (insn.mnem in ("RTS", "RTL", "NOP", "CLC", "DEY", "INX", "DEX", "TYA", "XBA")
                  and insn.mode == IMP)
+                or (insn.mnem in ("PHA", "PLA") and insn.mode == IMP
+                    and insn.m_flag == 1)
                 # Index-width changes need separate narrowing/resume support.
                 or (insn.mnem in ("REP", "SEP") and insn.mode == IMM
                     and not (insn.operand & 0x10))
@@ -105,6 +107,32 @@ def validate_instruction_leaf(block_pairs, cfg):
             returns += insn.mnem in ("RTS", "RTL") or direct_long_tail(insn, ops)
     if not returns:
         raise ValueError("instruction timing requires a reachable RTS, RTL or direct JML")
+    if any(insn.mnem in ("PHA", "PLA")
+           for pairs in block_pairs.values() for insn, _ in pairs):
+        # Restrict this support to local byte-stack brackets. Equal depth at
+        # joins also rejects loops that accumulate pushes or consume frames.
+        depths = {cfg.entry: 0}
+        pending = [cfg.entry]
+        while pending:
+            key = pending.pop()
+            depth = depths[key]
+            for insn, ops in block_pairs[key]:
+                if insn.mnem == "PHA":
+                    depth += 1
+                elif insn.mnem == "PLA":
+                    depth -= 1
+                if depth < 0:
+                    raise ValueError("instruction timing cannot pull the caller's frame")
+                if depth and (insn.mnem in ("RTS", "RTL", "JSR", "JSL")
+                              or direct_long_tail(insn, ops)):
+                    raise ValueError("instruction timing requires balanced stack at transfers")
+            for successor in cfg.blocks[key].successors:
+                if successor in depths:
+                    if depths[successor] != depth:
+                        raise ValueError("instruction timing requires equal stack depth at joins")
+                else:
+                    depths[successor] = depth
+                    pending.append(successor)
 
 
 class BusTimingLines(list):

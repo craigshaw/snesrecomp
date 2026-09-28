@@ -7,12 +7,26 @@
 #include "snes/ppu.h"
 #include "snes/snes.h"
 #include "cpu_state.h"
+#include "snes/aot_bus_timing.h"
 
 Ppu *g_ppu;
 uint8_t g_snesrecomp_last_hdmaen;
 bool g_fail;
 int g_interp_apu_driving;
+int g_aot_instruction_read_active;
+uint8 g_memsel;
 CpuState g_cpu;
+static Snes *read_snes;
+
+uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {
+    (void)cpu;
+    return snes_read(read_snes, ((uint32)bank << 16) | addr);
+}
+
+uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 addr) {
+    uint16 lo = cpu_read8(cpu, bank, addr);
+    return lo | ((uint16)cpu_read8(cpu, bank, (uint16)(addr + 1)) << 8);
+}
 
 void wlog_addr_note_direct(uint32_t wa, uint8_t v, const char *via) {
     (void)wa;
@@ -172,6 +186,38 @@ int main(void) {
     failures += check(ppu_regs[0x27] == 0x66, "external beam owner can run HDMA HBlank hook");
     failures += check(dma->channel[0].tableAdr == 0x0203, "external beam owner consumed terminator");
     failures += check(dma->channel[0].hdmaActive, "external beam owner preserves HDMAEN state");
+
+    /* The real HVBJOY read must sample the current phase. Instruction-timed
+     * reads already advance time on commit; a legacy 64-clock tick would
+     * cross HBlank and expire the joypad timer before this read. */
+    dma_reset(dma);
+    snes.hPos = 1012;
+    snes.vPos = 0;
+    snes.autoJoyTimer = 40;
+    read_snes = &snes;
+    CpuAotInstructionTiming timing = {4, 30};
+    uint8 value = cpu_aot_insn_read8(&g_cpu, &timing, 0, 0x4212);
+    failures += check(value == 1 && snes.hPos == 1012 && snes.autoJoyTimer == 40,
+                      "instruction read samples HVBJOY without a polling tick");
+    failures += check(g_aot_instruction_read_active == 0 && timing.master == 30,
+                      "instruction read restores scope and retains its bus cost");
+    snes_advance_master_cycles(&snes, timing.master);
+    failures += check(snes.hPos == 1042 && snes.autoJoyTimer == 10,
+                      "instruction completion advances the beam only once");
+    g_aot_instruction_read_active = 1;
+    value = (uint8)cpu_aot_insn_read16(&g_cpu, &timing, 0x80, 0x4212);
+    failures += check(value == 0x41 && snes.hPos == 1042 &&
+                          g_aot_instruction_read_active == 1,
+                      "word and mirrored reads preserve an outer timing scope");
+    g_aot_instruction_read_active = 0;
+    g_interp_apu_driving = 1;
+    value = snes_read(&snes, 0x4212);
+    failures += check(value == 0x41 && snes.hPos == 1042,
+                      "interpreter-owned read still has no polling tick");
+    g_interp_apu_driving = 0;
+    value = snes_read(&snes, 0x4212);
+    failures += check(value == 0x40 && snes.hPos == 1106,
+                      "legacy read retains its existing polling tick");
 
     dma_free(dma);
     if (failures) return 1;

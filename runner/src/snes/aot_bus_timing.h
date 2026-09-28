@@ -70,12 +70,20 @@ static inline void cpu_aot_insn_bus_extra(CpuAotInstructionTiming *timing,
 static inline uint8 cpu_aot_insn_read8(CpuState *cpu, CpuAotInstructionTiming *timing,
                                       uint8 bank, uint16 addr) {
     cpu_aot_insn_bus_extra(timing, bank, addr, 1);
-    return cpu_read8(cpu, bank, addr);
+    int saved = g_aot_instruction_read_active;
+    g_aot_instruction_read_active = 1;
+    uint8 value = cpu_read8(cpu, bank, addr);
+    g_aot_instruction_read_active = saved;
+    return value;
 }
 static inline uint16 cpu_aot_insn_read16(CpuState *cpu, CpuAotInstructionTiming *timing,
                                         uint8 bank, uint16 addr) {
     cpu_aot_insn_bus_extra(timing, bank, addr, 2);
-    return cpu_read16(cpu, bank, addr);
+    int saved = g_aot_instruction_read_active;
+    g_aot_instruction_read_active = 1;
+    uint16 value = cpu_read16(cpu, bank, addr);
+    g_aot_instruction_read_active = saved;
+    return value;
 }
 static inline void cpu_aot_insn_write8(CpuState *cpu, CpuAotInstructionTiming *timing,
                                       uint8 bank, uint16 addr, uint8 value) {

@@ -98,6 +98,8 @@ static void bridge_apu_flush(CpuState *cpu) {
     RtlApuUnlock();
     s_apu_pending_master = 0;
 }
+int g_aot_instruction_read_active;
+
 void interp_bridge_commit_instruction(CpuState *cpu, unsigned cycles,
                                       uint64_t master) {
     cpu->cycles += cycles;

@@ -259,3 +259,22 @@ comparison flags, index wrap, direct-page penalties and a repeated indexed-store
 loop with the real interpreter. It checks 50 complete executions and 716
 deadline, refresh, NMI and IRQ stop/resume pairs. It does not enable stack
 instructions or external short branches.
+
+## Balanced byte accumulator stack
+
+Selected instruction timing supports PHA and PLA with M=1, plus DEX in both
+index widths. Stack depth must agree at control-flow joins and return to zero
+before a call, tail transfer or return. Pulling the caller's frame is rejected.
+Word stack operations remain unsupported in this mode.
+
+`test_stack_instruction_timing.py` checks 18 complete executions and 432
+event/resume comparisons against the real interpreter, including nested byte
+stacks, a balanced loop, accumulator high-byte preservation, DEX wrap, both
+index widths and SlowROM/FastROM. Six rejected programs cover unsupported
+stack paths. These tests do not establish general stack or coroutine support.
+
+Instruction-timed bus reads use a saved/restored read scope. The real HVBJOY
+register handler suppresses its legacy synthetic beam tick inside this scope;
+the shared instruction completion advances time. The HDMA/MMIO test verifies
+HBlank and auto-joypad phase, byte and mirrored word reads, scope restoration,
+and preservation of the legacy and interpreter read paths.
