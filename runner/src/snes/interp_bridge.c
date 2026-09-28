@@ -1670,6 +1670,12 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                             }
                             if (s_lle_unwind_is_deadline) {
                                 s_lle_resume_pc24 = s_lle_unwind_pc24;
+                                /* A compiled JSL envelope can restore its
+                                 * caller's PB while propagating this unwind.
+                                 * The suspended guest is at the saved resume
+                                 * address, which owns PB until execution resumes. */
+                                in.k = (uint8_t)(s_lle_resume_pc24 >> 16);
+                                in.pc = (uint16_t)s_lle_resume_pc24;
                                 s_lle_unwind_active = 0;
                                 s_lle_unwind_owner_depth = 0;
                                 s_lle_unwind_is_deadline = 0;

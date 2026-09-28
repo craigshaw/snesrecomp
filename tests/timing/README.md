@@ -143,7 +143,7 @@ instruction versus block write timing, and preservation of branch timing
 through optimisation. After a fix, retain these tests and rerun title-level
 frame/state comparisons before accepting additional AOT roots.
 
-## Opt-in native leaf instruction timing
+## Opt-in native instruction timing
 
 `SNESRECOMP_EMIT_INSTRUCTION_TIMING=008000:1:0,008100:0:1` selects exact
 generated entry keys as `HEXPC:M:X`. It works independently of
@@ -152,13 +152,13 @@ key. With the global bus option absent, unselected bodies retain their
 original generated code. This permits a one-body comparison against the
 interpreter without also changing the timing of existing AOT coverage.
 
-This bounded implementation accepts native leaf routines with local branches
+This bounded implementation accepts native routines with local branches
 and RTS/RTL returns. Supported data instructions are NOP, LDA/LDX/LDY,
 STA/STX/STY/STZ, CMP and ADC with immediate, direct-page, absolute or long
 addressing, including their supported indexed forms. Accumulator ASL, the
 eight conditional branches, BRA and BRL are also accepted. Every branch must
 stay inside the selected function. Unsupported selected bodies fail
-generation. Emulation-mode invocations use the interpreter. Calls, external
+generation. Emulation-mode invocations use the interpreter. External
 branches, stack manipulation, indirect addressing, RMW, RTI and block moves are outside
 this instruction-timing experiment.
 
@@ -203,6 +203,30 @@ The supported instruction list is a bounded experiment, not a claim of
 general MMIO equivalence. APU-port handshakes, DMA, real peripheral timing,
 optimised calls and other control paths still need title-level validation.
 No new generation option is enabled by default.
+
+Ordinary direct JSR and JSL are also supported, as is immediate ORA. A call
+pushes its architectural return frame and commits its clocks before entering
+the callee. If an event is due, execution resumes at the callee entry with that
+frame intact. A missing exact compiled callee in scheduler mode transfers
+control to the owning interpreter, including the caller continuation. It does
+not enter a nested bounded interpreter that can run past the event deadline.
+The diagnostic body-entry deny guard uses the same ownership transfer, so
+a compiled caller cannot bypass scheduler deadlines through a disabled callee.
+Outside scheduler mode, the existing bounded call fallback remains in use.
+The owning interpreter restores PB from the saved resume address when a
+deadline unwind passes through compiled JSL envelopes.
+
+Indirect, dispatch-helper, terminal, no-return and cfg-pinned calls remain
+unsupported in this selected mode. The analyzer must still establish the
+widths at any compiled continuation. Selecting instruction timing supplies
+no new exit contract and does not make an unknown callee exit safe.
+
+`python3 tests/timing/test_call_instruction_timing.py` compares 48 complete
+synthetic executions and 3,168 event/resume cases in each of two modes, with
+and without global bus timing. It covers skipped calls, JSR and cross-bank
+JSL, both accumulator and index widths, SlowROM and FastROM, compiled, missing and runtime-disabled
+callees, immediate ORA, stack write order and timestamps, refresh,
+NMI, IRQ, PB restoration, and APU accumulation. The shared C suite includes it.
 
 
 The local-branch and arithmetic extension is checked by:

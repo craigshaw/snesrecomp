@@ -2001,7 +2001,8 @@ def emit_function(rom: bytes, bank: int, start: int,
                             lines.append(
                                 "/* PHK;JSR long-call veneer -> long call */")
                         for ln in emit_op(emitted_op,
-                                          getattr(di_insn, 'addr', None)):
+                                          getattr(di_insn, 'addr', None),
+                                          instruction_commit=lines.commit() if instruction_timing else None):
                             lines.append(ln)
                         if op.terminal:
                             block_terminated = True
@@ -2010,7 +2011,7 @@ def emit_function(rom: bytes, bank: int, start: int,
                     for ln in emit_op(op, getattr(di_insn, 'addr', None)):
                         lines.append(ln)
             if instruction_timing and not any(
-                    isinstance(op, (Return, CondBranch, Goto)) for op in ir_ops):
+                    isinstance(op, (Return, CondBranch, Goto, Call)) for op in ir_ops):
                 lines.append(lines.commit())
         # NLR with no terminator IR (block IR was pure-PullReg, like
         # $01:A3CB's [PLA, PLA, fall-through]). The SKIP setter wasn't
@@ -2166,10 +2167,12 @@ def emit_function(rom: bytes, bank: int, start: int,
     # the runtime deny set. Uses the runtime continuation, so it is sound for
     # every entry path — enabling rebuild-free subset bisection of a seeded AOT
     # set against the interpreter oracle. Off unless SNESRECOMP_EMIT_AOT_DENY_GATE.
+    # Hand nested calls to the owning interpreter, just like a missing exact
+    # timed callee. A new bounded interpreter would ignore its event deadline.
     if os.environ.get('SNESRECOMP_EMIT_AOT_DENY_GATE'):
         src.append(
             f'  if (rtl_aot_node_denied(0x{fn_entry_pc:06X}u)) {{ '
-            f'RecompStackPop(); return interp_tier_dispatch_balanced('
+            f'RecompStackPop(); return interp_tier_dispatch_tail('
             f'cpu, 0x{fn_entry_pc:06X}u, 0x{fn_entry_pc:06X}u, _entry_s, _hrv); }}')
     if instruction_timing:
         src.append(

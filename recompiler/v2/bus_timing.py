@@ -22,7 +22,7 @@ INSTRUCTION_ENV = "SNESRECOMP_EMIT_INSTRUCTION_TIMING"
 
 
 def instruction_targets():
-    """Explicit native leaf entry keys, written as HEXPC:M:X, comma separated."""
+    """Explicit native entry keys, written as HEXPC:M:X, comma separated."""
     return _targets(INSTRUCTION_ENV)
 
 
@@ -56,9 +56,10 @@ def scope_function(emitter):
 
 
 def validate_instruction_leaf(block_pairs, cfg):
-    """Accept native leaves with tested control flow, arithmetic and status."""
+    """Accept native bodies with tested control flow, arithmetic and status."""
     from snes65816 import (IMP, ACC, IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X,
                           DP, DP_X, DP_Y, REL, REL16)
+    from v2.ir import Call
     data_modes = (IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X, DP, DP_X, DP_Y)
     branches = ("BEQ", "BNE", "BCC", "BCS", "BMI", "BPL", "BVC", "BVS", "BRA", "BRL")
     returns = 0
@@ -70,7 +71,14 @@ def validate_instruction_leaf(block_pairs, cfg):
             raise ValueError("instruction timing requires local branch targets")
         if not successors and pairs[-1][0].mnem not in ("RTS", "RTL"):
             raise ValueError("instruction timing requires a final RTS or RTL")
-        for insn, _ in pairs:
+        for insn, ops in pairs:
+            direct_call = (insn.mnem in ("JSR", "JSL") and insn.mode in (ABS, LONG)
+                           and not getattr(insn, 'dispatch_entries', None)
+                           and not getattr(insn, 'dispatch_runtime', False)
+                           and not getattr(insn, 'long_call_trampoline_target', None)
+                           and any(isinstance(op, Call) and not op.indirect
+                                   and not op.terminal and not op.noreturn
+                                   and op.target is not None for op in ops))
             supported = (
                 (insn.mnem in ("RTS", "RTL", "NOP", "CLC", "DEY", "TYA", "XBA")
                  and insn.mode == IMP)
@@ -80,8 +88,10 @@ def validate_instruction_leaf(block_pairs, cfg):
                 or (insn.mnem in ("LDA", "LDX", "LDY", "STA", "STX", "STY", "STZ",
                                   "CMP", "ADC", "AND", "EOR", "BIT")
                     and insn.mode in data_modes)
+                or (insn.mnem == "ORA" and insn.mode == IMM)
                 or (insn.mnem in ("ASL", "INC") and insn.mode == ACC)
-                or (insn.mnem in branches and insn.mode in (REL, REL16)))
+                or (insn.mnem in branches and insn.mode in (REL, REL16))
+                or direct_call)
             if not supported:
                 raise ValueError(f"instruction timing does not yet support {insn.mnem} at {insn.addr:06X}")
             returns += insn.mnem in ("RTS", "RTL")

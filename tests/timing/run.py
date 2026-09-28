@@ -19,6 +19,7 @@ import tempfile
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "recompiler"))
 from v2.emit_function import emit_function
+from v2 import codegen
 
 # Expected interpreter totals are hand-derived bus/internal-cycle budgets.
 # RTL has four bus reads (opcode and three stack bytes) and two internal
@@ -72,20 +73,33 @@ def build(out: Path, cc: str, cases=None) -> Path:
         for target in case.get("callees", []):
             for m in (0, 1):
                 for xf in (0, 1):
-                    bodies.append(emit_function(bytes(rom), bank=target >> 16,
-                                                start=target & 0xFFFF,
-                                                entry_m=m, entry_x=xf))
+                    old = os.environ.get("SNESRECOMP_EMIT_INSTRUCTION_TIMING")
+                    if case.get("instruction_timing"):
+                        os.environ["SNESRECOMP_EMIT_INSTRUCTION_TIMING"] = f"{target:06X}:{m}:{xf}"
+                    try:
+                        bodies.append(emit_function(bytes(rom), bank=target >> 16,
+                                                    start=target & 0xFFFF,
+                                                    entry_m=m, entry_x=xf))
+                    finally:
+                        if old is None:
+                            os.environ.pop("SNESRECOMP_EMIT_INSTRUCTION_TIMING", None)
+                        else:
+                            os.environ["SNESRECOMP_EMIT_INSTRUCTION_TIMING"] = old
         name = f"timing_case_{i}_M{case.get('m', 1)}X{case.get('xf', 0)}"
         saved_instruction_timing = os.environ.get("SNESRECOMP_EMIT_INSTRUCTION_TIMING")
         if case.get("instruction_timing"):
             os.environ["SNESRECOMP_EMIT_INSTRUCTION_TIMING"] = (
                 f"{pc:06X}:{case.get('m', 1)}:{case.get('xf', 0)}")
         try:
+            codegen.set_valid_variants({target: frozenset()
+                                       for target in case.get("interpreted_callees", [])},
+                                      authoritative=bool(case.get("interpreted_callees")))
             bodies.append(emit_function(bytes(rom), bank=pc >> 16,
                                         start=pc & 0xFFFF,
                                         entry_m=case.get("m", 1), entry_x=case.get("xf", 0),
                                         func_name=f"timing_case_{i}"))
         finally:
+            codegen.set_valid_variants({})
             if saved_instruction_timing is None:
                 os.environ.pop("SNESRECOMP_EMIT_INSTRUCTION_TIMING", None)
             else:
@@ -127,7 +141,7 @@ typedef struct TimingCase {
     result = subprocess.run(cmd, text=True, capture_output=True)
     (out / "build.log").write_text(result.stdout + result.stderr)
     if result.returncode:
-        raise RuntimeError(f"compiler failed; see {out / 'build.log'}")
+        raise RuntimeError(f"compiler failed; see {out / 'build.log'}\n{result.stderr}")
     return binary
 
 

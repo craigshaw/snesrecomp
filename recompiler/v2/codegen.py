@@ -2087,7 +2087,11 @@ def _emit_return_frame_push(op: 'Call') -> List[str]:
     ]
 
 
-def _emit_call(op: Call) -> List[str]:
+def _emit_call(op: Call, instruction_commit: Optional[str] = None) -> List[str]:
+    if instruction_commit is not None:
+        if (op.indirect or op.target is None or op.noreturn or op.terminal
+                or op.source_pc24 in _FORCE_VARIANT_AT):
+            raise ValueError("instruction timing requires an ordinary direct call")
     if op.indirect:
         # cfg-required-dispatch-or-kill (2026-05-03): JSR (abs,X) is
         # ONLY emitted as a real dispatch when cfg has authorised it
@@ -2123,6 +2127,8 @@ def _emit_call(op: Call) -> List[str]:
     # similar dead-code targets, delete the cfg entries and re-regen —
     # this gate then rejects them in subsequent runs.
     if _is_invalid_lorom_call_target(addr) and addr not in _NAME_RESOLVER:
+        if instruction_commit is not None:
+            raise ValueError("instruction timing requires a valid direct call target")
         _REJECTED_CALL_TARGETS.add(addr)
         return [f"/* Call: target ${addr:06X} not a valid LoROM code "
                 f"address and no cfg name — skipped (decoder followed "
@@ -2148,6 +2154,23 @@ def _emit_call(op: Call) -> List[str]:
     # emit-truth prune pass (valid_variant_list), which we must not
     # re-demand or auto-promote would resurrect the garbage body.
     call_trace_pc = f"0x{((op.source_pc24 or 0) & 0xFFFFFF):06x}u"
+    # Commit the call's fetch and stack costs before entering either tier.
+    # A crossed event belongs to the callee entry with the real frame intact.
+    call_boundary = [] if instruction_commit is None else [
+        instruction_commit,
+        "if (interp_bridge_lle_instruction_boundary_reached(cpu)) {",
+        f"  return interp_bridge_lle_yield_unwind(cpu, 0x{addr:06x}u);",
+        "}",
+    ]
+    frame_size = 3 if op.long else 2
+    call_fallback = (f"interp_tier_run_call_frame(cpu, 0x{addr:06x}u, "
+                     f"{call_trace_pc}, {frame_size}, NULL)")
+    if instruction_commit is not None:
+        # A nested bounded interpreter does not own scheduler deadlines.
+        # Hand its real call frame and continuation to the active owner.
+        call_fallback = (f"(interp_bridge_in_lle_scheduler() ? "
+                         f"interp_tier_dispatch_tail(cpu, 0x{addr:06x}u, "
+                         f"{call_trace_pc}, _entry_s, _hrv) : {call_fallback})")
     if op.noreturn:
         if op.long:
             raise ValueError("noreturn call contract is only valid for direct JSR")
@@ -2239,15 +2262,13 @@ def _emit_call(op: Call) -> List[str]:
         # correct on the SKIP_N return path.
         lines = ["{"]
         lines += _emit_return_frame_push(op)
-        body = [
+        body = call_boundary + [
             "RecompReturn _r;",
             "switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1)) {",
         ]
         body += variant_dispatch_case_lines(
             addr, base_name, indent="  ",
-            lle_fallback=(
-                f"interp_tier_run_call_frame(cpu, 0x{addr:06x}u, "
-                f"{call_trace_pc}, 3, NULL)"))
+            lle_fallback=call_fallback)
         body.append("}")
         env = emitter_helpers.pb_save_restore_envelope(
             target_bank, body, trace_pc24=op.source_pc24 or 0)
@@ -2260,15 +2281,14 @@ def _emit_call(op: Call) -> List[str]:
     # "return" — that includes the SKIP propagation `return` below.
     lines = ["{"]
     lines += _emit_return_frame_push(op)
+    lines += call_boundary
     lines += [
         "  RecompReturn _r;",
         "  switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1)) {",
     ]
     lines += variant_dispatch_case_lines(
         addr, base_name,
-        lle_fallback=(
-            f"interp_tier_run_call_frame(cpu, 0x{addr:06x}u, "
-            f"{call_trace_pc}, 2, NULL)"))
+        lle_fallback=call_fallback)
     lines.extend([
         "  }",
         "  if (_r != RECOMP_RETURN_NORMAL) {",
@@ -2672,6 +2692,8 @@ def emit_op(op: IROp, source_pc24: Optional[int] = None, *,
     _CURRENT_SOURCE_PC24 = (int(source_pc24) & 0xFFFFFF) if source_pc24 is not None else 0
     try:
         if instruction_commit is not None:
+            if isinstance(op, Call):
+                return _emit_call(op, instruction_commit)
             assert isinstance(op, Return) and not op.interrupt
             return _emit_return(op, instruction_commit)
         return [ln for ln in h(op) if ln]
