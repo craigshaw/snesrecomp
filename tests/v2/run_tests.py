@@ -57,6 +57,7 @@ TEST_MODULES = [
     'test_emit_function_tail_call_past_end',
     'test_indexed_addressing_bank_carry',
     'test_exit_mx_autoroute',
+    'test_exact_exit_contracts',
     'test_prune_unresolved_indirect_goto',
     'test_atomic_output',
     'test_translation_units',

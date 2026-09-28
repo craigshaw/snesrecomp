@@ -369,6 +369,16 @@ fn load_inputs(cfg_dir: &Path, rom: &mut Vec<u8>, all_cfg_roots: bool) -> Result
         }
     }
 
+    // Exact declarations refine broadcast hints regardless of cfg file order.
+    for cfg in &cfgs {
+        for &(exit_bank, pc, m, x, exit_m, exit_x) in &cfg.exit_mx_for {
+            let target = ((exit_bank as u32) << 16) | pc;
+            for resolved in [Some(target), mirror_pc24(target)].into_iter().flatten() {
+                declared_exit_modes.insert((resolved, m, x), (exit_m, exit_x));
+            }
+        }
+    }
+
     // Reloc regions: any cfg `reloc` directives, plus a synthetic region per
     // `ram_routine` whose blob bytes are appended to the ROM image at a
     // $8000-aligned offset. Redirecting the WRAM entry to a plain LoROM

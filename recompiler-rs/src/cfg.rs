@@ -115,6 +115,8 @@ pub struct BankCfg {
     pub reloc_regions: Vec<RelocRegion>,
     pub ram_routines: Vec<RamRoutine>,
     pub exit_mx_at: Vec<(u8, u32, u8, u8)>, // (bank, addr16, m, x)
+    /// Explicit (bank, addr16, entry M, entry X, exit M, exit X) contracts.
+    pub exit_mx_for: Vec<(u8, u32, u8, u8, u8, u8)>,
     pub exit_mx_at_per_variant: Vec<(u8, u32, u8, u8, u8, u8)>,
     pub auto_vectors: bool,
     pub indirect_dispatch: Vec<IndirectDispatch>,
@@ -725,6 +727,22 @@ pub fn parse_bank_cfg(text: &str, path: &str) -> Result<BankCfg, String> {
             }
             continue;
         }
+        // exit_mx_for <hex_pc24> <entry_m> <entry_x> <exit_m> <exit_x>
+        if head == "exit_mx_for" {
+            if tokens.len() != 6 {
+                return Err(format!("{path}: exit_mx_for needs an address and four width bits"));
+            }
+            let addr = parse_hex(tokens[1])
+                .map_err(|e| format!("{path}: invalid exit_mx_for address: {e}"))?;
+            let widths: Result<Vec<u8>, _> = tokens[2..].iter().map(|s| s.parse()).collect();
+            let widths = widths.map_err(|e| format!("{path}: invalid exit_mx_for widths: {e}"))?;
+            if addr > 0xFFFFFF || widths.iter().any(|&bit| bit > 1) {
+                return Err(format!("{path}: exit_mx_for address or width bit out of range"));
+            }
+            cfg.exit_mx_for.push(((addr >> 16) as u8, addr & 0xFFFF,
+                widths[0], widths[1], widths[2], widths[3]));
+            continue;
+        }
         // exit_mx_at <hex_24bit_addr> <m> <x>
         if head == "exit_mx_at" && tokens.len() >= 4 {
             if let (Ok(addr_24), Ok(m_val), Ok(x_val)) = (
@@ -882,6 +900,18 @@ fn parse_int_auto(tok: &str) -> Result<i64, std::num::ParseIntError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_exit_contracts_validate_bits_and_preserve_entry_scope() {
+        let cfg = parse_bank_cfg("bank = 00\nexit_mx_for 018200 1 0 0 1\n", "t").unwrap();
+        assert_eq!(cfg.exit_mx_for, vec![(1, 0x8200, 1, 0, 0, 1)]);
+        assert!(cfg.exit_mx_at.is_empty());
+        assert!(cfg.exit_mx_at_per_variant.is_empty());
+        for args in ["008200 2 0 1 0", "008200 1 0 -1 0", "1008200 1 0 1 0",
+                     "008200 1 0 1", "008200 1 0 1 0 extra"] {
+            assert!(parse_bank_cfg(&format!("bank = 00\nexit_mx_for {args}\n"), "t").is_err());
+        }
+    }
 
     #[test]
     fn missing_bank_errors() {

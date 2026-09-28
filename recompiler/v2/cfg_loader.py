@@ -101,6 +101,10 @@ class BankCfg:
     # backward compat with hand-written hints that pre-date the
     # per-variant work.
     exit_mx_at: List[Tuple[int, int, int, int]] = field(default_factory=list)
+    # Explicit exact-entry contracts. Kept separate from inferred routes so
+    # an autoroute refresh cannot discard a declared fact.
+    # (bank, addr16, entry_m, entry_x, exit_m, exit_x)
+    exit_mx_for: List[Tuple[int, int, int, int, int, int]] = field(default_factory=list)
     # Per-entry-variant exit (m, x) tuples populated by the auto-router.
     # Each entry is (bank, addr16, entry_m, entry_x, exit_m, exit_x).
     # Consumed by v2_regen.py's callee_exit_mx builder; per-variant
@@ -760,6 +764,22 @@ def load_bank_cfg(path: str) -> BankCfg:
                 except ValueError:
                     continue
                 cfg.exclude_ranges.append((s, e))
+                continue
+
+            # exit_mx_for <hex_pc24> <entry_m> <entry_x> <exit_m> <exit_x>
+            if head == 'exit_mx_for':
+                try:
+                    if len(tokens) != 6:
+                        raise ValueError('expected an address and four width bits')
+                    addr_24 = _parse_hex(tokens[1])
+                    widths = tuple(int(value) for value in tokens[2:])
+                    if not 0 <= addr_24 <= 0xFFFFFF or any(
+                            value not in (0, 1) for value in widths):
+                        raise ValueError('address or width bit out of range')
+                except ValueError as exc:
+                    raise ValueError(f'{path}: invalid exit_mx_for: {stripped!r}') from exc
+                cfg.exit_mx_for.append(
+                    (addr_24 >> 16, addr_24 & 0xFFFF, *widths))
                 continue
 
             # exit_mx_at <hex_24bit_addr> <m> <x>

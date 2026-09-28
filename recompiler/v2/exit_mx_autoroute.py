@@ -232,6 +232,14 @@ def detect_and_route(parsed, rom: bytes,
                 callee_exit_mx[key] = (m_val & 1, x_val & 1)
                 seeded_keys.add(key)
 
+    # Exact declarations override broadcast hints only for their entry key.
+    # Preserve them across inferred-route refreshes, including preserving exits.
+    for _bank, _cfg_path, cfg in parsed:
+        for b_id, addr16, em, ex, exit_m, exit_x in getattr(cfg, 'exit_mx_for', ()):
+            key = ((b_id << 16) | addr16, em, ex)
+            callee_exit_mx[key] = (exit_m, exit_x)
+            seeded_keys.add(key)
+
     # Iterative fixpoint with re-derivation. Each pass walks every
     # cfg entry × every (em, ex); decodes under the current
     # callee_exit_mx; updates the entry if the derived exit differs

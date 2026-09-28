@@ -766,6 +766,11 @@ def _rebuild_callee_exit_mx(parsed, variants: dict) -> tuple:
                 ex_m & 1, ex_xf & 1)
             per_variant_count += 1
 
+    for _bank, _cfg_path, cfg in parsed:
+        for b_id, addr16, em, ex, exit_m, exit_x in cfg.exit_mx_for:
+            callee_exit_mx[((b_id << 16) | addr16, em, ex)] = (exit_m, exit_x)
+            per_variant_count += 1
+
     return (
         callee_exit_mx,
         cfg_exit_mx_count,
@@ -1681,50 +1686,13 @@ def main() -> int:
     # we have a more principled inference (e.g. CFG-aware path
     # analysis, or per-edge propagation that doesn't rely on the same
     # decoder used for emit).
-    callee_exit_mx: dict = {}
-    cfg_exit_mx_count = 0
-    declared_exit_mx: dict = {}  # (bank, addr16) -> (m, x)
-    # Collect from `exit_mx_at <bankaddr16> <m> <x>` cfg directives
-    # across all banks. This is the standalone form — independent of
-    # any `func` entry, so callees discovered only via auto-promote
-    # (e.g. $00:F461 — reached via JSR but with no own `func` line)
-    # can still carry the annotation.
-    for bank, _cfg_path, cfg in parsed:
-        for (b_id, addr16, m_val, x_val) in cfg.exit_mx_at:
-            declared_exit_mx[(b_id & 0xFF, addr16 & 0xFFFF)] = (m_val, x_val)
-    # Broadcast each declared exit_mx to ALL (m, x) variants at the
-    # target address. Variants are the discovered set in `variants`.
-    for (b_id, addr16), (ex_m, ex_xf) in declared_exit_mx.items():
-        target_pc24 = (b_id << 16) | addr16
-        mx_set = variants.get(target_pc24)
-        if mx_set:
-            for em, ex2 in mx_set:
-                callee_exit_mx[(target_pc24, em, ex2)] = (ex_m, ex_xf)
-                cfg_exit_mx_count += 1
-        else:
-            # No discovered variants — apply to cfg-default (1, 1).
-            callee_exit_mx[(target_pc24, 1, 1)] = (ex_m, ex_xf)
-            cfg_exit_mx_count += 1
-
-    # Per-variant exit_mx_at: populated by the auto-router with one
-    # (entry_m, entry_x) → (exit_m, exit_x) tuple per mutating variant.
-    # Per-variant entries OVERRIDE the broadcast 4-tuple at the same
-    # (target, em, ex) key — but cfg-declared 4-tuples are seeded by
-    # the auto-router itself before its own analysis runs, so hand-
-    # written hints stay authoritative.
-    per_variant_count = 0
-    for bank, _cfg_path, cfg in parsed:
-        for (b_id, addr16, em_in, ex_in, ex_m, ex_xf) in \
-                cfg.exit_mx_at_per_variant:
-            target_pc24 = ((b_id & 0xFF) << 16) | (addr16 & 0xFFFF)
-            callee_exit_mx[(target_pc24, em_in & 1, ex_in & 1)] = (
-                ex_m & 1, ex_xf & 1)
-            per_variant_count += 1
+    callee_exit_mx, cfg_exit_mx_count, declared_exit_count, per_variant_count = (
+        _rebuild_callee_exit_mx(parsed, variants))
 
     if cfg_exit_mx_count or per_variant_count:
         print()
         print(f"Loaded {cfg_exit_mx_count} cfg `exit_mx_at` broadcast "
-              f"annotations ({len(declared_exit_mx)} unique targets); "
+              f"annotations ({declared_exit_count} unique targets); "
               f"{per_variant_count} per-variant overrides")
 
     # Capture cfg-declared (canonical) variants BEFORE the clone step.
@@ -2353,32 +2321,8 @@ def main() -> int:
             cfg2.exit_mx_at_per_variant.clear()
         refreshed_exit_mx_fixes = autoroute_exit_mx(
             parsed, rom, dispatch_helpers=dispatch_helpers)
-        callee_exit_mx = {}
-        cfg_exit_mx_count = 0
-        declared_exit_mx = {}
-        for _bank2, _cfg_path2, cfg2 in parsed:
-            for (b_id, addr16, m_val, x_val) in cfg2.exit_mx_at:
-                declared_exit_mx[(b_id & 0xFF, addr16 & 0xFFFF)] = (
-                    m_val, x_val)
-        for (b_id, addr16), (ex_m, ex_xf) in declared_exit_mx.items():
-            target_pc24 = (b_id << 16) | addr16
-            mx_set = variants.get(target_pc24)
-            if mx_set:
-                for em, ex2 in mx_set:
-                    callee_exit_mx[(target_pc24, em, ex2)] = (
-                        ex_m, ex_xf)
-                    cfg_exit_mx_count += 1
-            else:
-                callee_exit_mx[(target_pc24, 1, 1)] = (ex_m, ex_xf)
-                cfg_exit_mx_count += 1
-        per_variant_count = 0
-        for _bank2, _cfg_path2, cfg2 in parsed:
-            for (b_id, addr16, em_in, ex_in, ex_m, ex_xf) in \
-                    cfg2.exit_mx_at_per_variant:
-                target_pc24 = ((b_id & 0xFF) << 16) | (addr16 & 0xFFFF)
-                callee_exit_mx[(target_pc24, em_in & 1, ex_in & 1)] = (
-                    ex_m & 1, ex_xf & 1)
-                per_variant_count += 1
+        callee_exit_mx, cfg_exit_mx_count, declared_exit_count, per_variant_count = (
+            _rebuild_callee_exit_mx(parsed, variants))
         callee_exit_mx_modes = _build_callee_exit_mx_modes(callee_exit_mx)
         exit_mx_rescan_all = True
         print(

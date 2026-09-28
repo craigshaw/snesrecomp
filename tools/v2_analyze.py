@@ -462,6 +462,13 @@ def _declared_exit_modes(parsed) -> dict:
                         result.setdefault(
                             (resolved_target, entry_m, entry_x),
                             (entry_m, entry_x))
+    # Apply exact declarations last, independent of the cfg file order.
+    # They refine legacy address-wide contracts without widening entry state.
+    for _bank_id, _path, cfg in parsed:
+        for bank, pc, entry_m, entry_x, exit_m, exit_x in cfg.exit_mx_for:
+            target = (bank << 16) | pc
+            for resolved_target in targets_with_mirror(target):
+                result[(resolved_target, entry_m, entry_x)] = (exit_m, exit_x)
     return result
 
 
