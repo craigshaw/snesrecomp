@@ -8,6 +8,7 @@
 #define cpu_dispatch_pc_paired bridge_fixture_paired
 #define snes_refresh_charge bridge_fixture_refresh
 #define snes_sync_master_clock bridge_fixture_sync_master
+#define cpu_take_tailcall_return_context bridge_fixture_take_tail
 #include "../interp816/bridge_test.c"
 #undef main
 #undef cpu_write8
@@ -16,7 +17,24 @@
 #undef cpu_dispatch_pc_paired
 #undef snes_refresh_charge
 #undef snes_sync_master_clock
+#undef cpu_take_tailcall_return_context
 #include "cpu_trace.h"
+
+static int tail_pending;
+static uint16 tail_entry_s;
+static uint8 tail_hrv;
+void cpu_tailcall_inherit_return_context(uint16 entry_s, uint8 hrv) {
+    tail_pending = 1;
+    tail_entry_s = entry_s;
+    tail_hrv = hrv;
+}
+int cpu_take_tailcall_return_context(uint16 *entry_s, uint8 *hrv) {
+    if (!tail_pending) return 0;
+    *entry_s = tail_entry_s;
+    *hrv = tail_hrv;
+    tail_pending = 0;
+    return 1;
+}
 
 typedef struct TimingWrite {
     uint32 address;

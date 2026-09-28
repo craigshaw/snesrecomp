@@ -1586,6 +1586,21 @@ def emit_function(rom: bytes, bank: int, start: int,
                 elif isinstance(op, Goto):
                     if instruction_timing:
                         lines.append(lines.commit())
+                        # A direct JML preserves the guest return frame but
+                        # changes PB. Stop at the destination before entering
+                        # either tier if its instruction crossed an event.
+                        from snes65816 import LONG as _TAIL_LONG
+                        if di_insn.mnem == 'JMP' and di_insn.mode == _TAIL_LONG:
+                            target_pc24 = di_insn.operand & 0xFFFFFF
+                            from v2.codegen import _is_invalid_lorom_call_target
+                            if _is_invalid_lorom_call_target(target_pc24):
+                                raise ValueError('instruction timing requires a ROM JML target')
+                            lines.extend([
+                                f"cpu->PB = 0x{target_pc24 >> 16:02X};",
+                                "if (interp_bridge_lle_instruction_boundary_reached(cpu)) {",
+                                f"  return interp_bridge_lle_yield_unwind(cpu, 0x{target_pc24:06X}u);",
+                                "}",
+                            ])
                     # JML to a registered dispatch helper (ExecutePtr /
                     # ExecutePtrLong). Bytes after the JML are a function-
                     # pointer table; the decoder already read them into

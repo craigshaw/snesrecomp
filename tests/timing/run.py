@@ -91,6 +91,9 @@ def build(out: Path, cc: str, cases=None) -> Path:
             os.environ["SNESRECOMP_EMIT_INSTRUCTION_TIMING"] = (
                 f"{pc:06X}:{case.get('m', 1)}:{case.get('xf', 0)}")
         try:
+            codegen.set_name_resolver({target: f"bank_{target >> 16:02X}_{target & 0xFFFF:04X}"
+                                      for target in (*case.get("callees", []),
+                                                     *case.get("interpreted_callees", []))})
             codegen.set_valid_variants({target: frozenset()
                                        for target in case.get("interpreted_callees", [])},
                                       authoritative=bool(case.get("interpreted_callees")))
@@ -99,6 +102,7 @@ def build(out: Path, cc: str, cases=None) -> Path:
                                         entry_m=case.get("m", 1), entry_x=case.get("xf", 0),
                                         func_name=f"timing_case_{i}"))
         finally:
+            codegen.set_name_resolver({})
             codegen.set_valid_variants({})
             if saved_instruction_timing is None:
                 os.environ.pop("SNESRECOMP_EMIT_INSTRUCTION_TIMING", None)

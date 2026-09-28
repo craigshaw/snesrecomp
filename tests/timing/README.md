@@ -240,3 +240,14 @@ exit/resume cases. Coverage includes all conditional branches, coincident
 branch/fall-through targets, native forward/backward page crossing, folded branches, BRA/BRL,
 8/16-bit arithmetic, carry and decimal status, and the accepted memory read
 addressing forms. This suite is also included in `tests/run_c_tests.sh`.
+
+Direct JML is supported in selected instruction timing. It commits its fetch
+costs, sets PB and checks the next event at the destination before entering
+either tier. It preserves the existing guest return frame. Indirect jumps,
+trampolines, dispatch helpers and external short branches remain excluded.
+
+`python3 tests/timing/test_tail_instruction_timing.py` uses the call fixture
+with direct tails. It compares 48 complete executions and 3,168 event/resume
+cases in each bus-option mode, including same-bank and cross-bank transfers,
+compiled, missing and disabled targets, both accumulator and index widths,
+SlowROM/FastROM, skipped tails, NMI, IRQ and refresh.

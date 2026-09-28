@@ -59,7 +59,13 @@ def validate_instruction_leaf(block_pairs, cfg):
     """Accept native bodies with tested control flow, arithmetic and status."""
     from snes65816 import (IMP, ACC, IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X,
                           DP, DP_X, DP_Y, REL, REL16)
-    from v2.ir import Call
+    from v2.ir import Call, Goto
+    def direct_long_tail(insn, ops):
+        return (insn.mnem == 'JMP' and insn.mode == LONG
+                and not getattr(insn, 'dispatch_entries', None)
+                and not getattr(insn, 'dispatch_runtime', False)
+                and not getattr(insn, 'return_trampoline', False)
+                and any(isinstance(op, Goto) for op in ops))
     data_modes = (IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X, DP, DP_X, DP_Y)
     branches = ("BEQ", "BNE", "BCC", "BCS", "BMI", "BPL", "BVC", "BVS", "BRA", "BRL")
     returns = 0
@@ -69,8 +75,9 @@ def validate_instruction_leaf(block_pairs, cfg):
         successors = cfg.blocks[key].successors
         if any(s not in block_pairs for s in successors):
             raise ValueError("instruction timing requires local branch targets")
-        if not successors and pairs[-1][0].mnem not in ("RTS", "RTL"):
-            raise ValueError("instruction timing requires a final RTS or RTL")
+        if (not successors and pairs[-1][0].mnem not in ("RTS", "RTL")
+                and not direct_long_tail(*pairs[-1])):
+            raise ValueError("instruction timing requires a final RTS, RTL or direct JML")
         for insn, ops in pairs:
             direct_call = (insn.mnem in ("JSR", "JSL") and insn.mode in (ABS, LONG)
                            and not getattr(insn, 'dispatch_entries', None)
@@ -91,12 +98,12 @@ def validate_instruction_leaf(block_pairs, cfg):
                 or (insn.mnem == "ORA" and insn.mode == IMM)
                 or (insn.mnem in ("ASL", "INC") and insn.mode == ACC)
                 or (insn.mnem in branches and insn.mode in (REL, REL16))
-                or direct_call)
+                or direct_call or direct_long_tail(insn, ops))
             if not supported:
                 raise ValueError(f"instruction timing does not yet support {insn.mnem} at {insn.addr:06X}")
-            returns += insn.mnem in ("RTS", "RTL")
+            returns += insn.mnem in ("RTS", "RTL") or direct_long_tail(insn, ops)
     if not returns:
-        raise ValueError("instruction timing requires a reachable RTS or RTL")
+        raise ValueError("instruction timing requires a reachable RTS, RTL or direct JML")
 
 
 class BusTimingLines(list):

@@ -18,7 +18,7 @@ class CallInstructionTiming(unittest.TestCase):
     def test_calls_with_global_bus_timing(self):
         self.check_calls(True)
 
-    def check_calls(self, global_bus):
+    def check_calls(self, global_bus, tail=False):
         cases = []
         for long in (False, True):
             for fast in (False, True):
@@ -32,7 +32,7 @@ class CallInstructionTiming(unittest.TestCase):
                             target = 0xA100 + len(cases) * 0x10
                             callee_bank = bank ^ 0x80 if long else bank
                             target24 = callee_bank << 16 | target
-                            call = ([0x22, target & 255, target >> 8, callee_bank] if long
+                            call = ([0x5C if tail else 0x22, target & 255, target >> 8, callee_bank] if long or tail
                                     else [0x20, target & 255, target >> 8])
                             code = ([0xAD, 0, 0x10] + [0xF0, len(call)] + call +
                                     [0x09, 0x80] + ([0] if not m else []) +
@@ -46,7 +46,7 @@ class CallInstructionTiming(unittest.TestCase):
                                 interpreted_callees=[target24] if interpreted else [],
                                 denied_callees=[target24] if route == 'denied' else [],
                                 memory={0x1000: int(not skip), target24: 0xEA,
-                                        target24 + 1: 0x6B if long else 0x60}))
+                                        target24 + 1: 0x6B if long or tail else 0x60}))
         with tempfile.TemporaryDirectory(prefix="snes-call-timing-") as temp, patch.dict(
                 os.environ, {k: v for k, v in os.environ.items()
                              if not k.startswith("SNESRECOMP_")}, clear=True):
@@ -74,7 +74,7 @@ class CallInstructionTiming(unittest.TestCase):
                             self.assertEqual(run(i, 'event-interp', event, *resume),
                                              run(i, 'event-aot', event, *resume))
                         events += 1
-            print(f"Call instruction timing: checked {len(cases)} complete and {events} event/resume comparisons")
+            print(f"{'Tail' if tail else 'Call'} instruction timing: checked {len(cases)} complete and {events} event/resume comparisons")
 
 
 if __name__ == '__main__':

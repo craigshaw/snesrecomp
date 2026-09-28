@@ -93,6 +93,7 @@ echo "=== generated/interpreted final bus clocks ==="
 python3 "$ROOT/tests/timing/test_bus_clocks.py"
 python3 "$ROOT/tests/timing/test_instruction_timing.py"
 python3 "$ROOT/tests/timing/test_call_instruction_timing.py"
+python3 "$ROOT/tests/timing/test_tail_instruction_timing.py"
 python3 "$ROOT/tests/timing/test_branch_instruction_timing.py"
 python3 "$ROOT/tests/timing/test_status_instruction_timing.py"
 
