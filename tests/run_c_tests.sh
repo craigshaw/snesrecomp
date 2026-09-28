@@ -98,6 +98,7 @@ python3 "$ROOT/tests/timing/test_branch_instruction_timing.py"
 python3 "$ROOT/tests/timing/test_status_instruction_timing.py"
 python3 "$ROOT/tests/timing/test_index_instruction_timing.py"
 python3 "$ROOT/tests/timing/test_stack_instruction_timing.py"
+python3 "$ROOT/tests/timing/test_subtract_rmw_instruction_timing.py"
 
 echo "=== DSP-1 bus/core shell ==="
 "$CC" -std=c11 -Wall -Wextra -Werror -O1 \

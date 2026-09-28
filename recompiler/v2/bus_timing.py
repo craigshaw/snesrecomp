@@ -87,7 +87,7 @@ def validate_instruction_leaf(block_pairs, cfg):
                                    and not op.terminal and not op.noreturn
                                    and op.target is not None for op in ops))
             supported = (
-                (insn.mnem in ("RTS", "RTL", "NOP", "CLC", "DEY", "INX", "DEX", "TYA", "XBA")
+                (insn.mnem in ("RTS", "RTL", "NOP", "CLC", "SEC", "DEY", "INX", "DEX", "TYA", "XBA")
                  and insn.mode == IMP)
                 or (insn.mnem in ("PHA", "PLA") and insn.mode == IMP
                     and insn.m_flag == 1)
@@ -99,6 +99,11 @@ def validate_instruction_leaf(block_pairs, cfg):
                     and insn.mode in data_modes)
                 or (insn.mnem == "ORA" and insn.mode == IMM)
                 or (insn.mnem == "CPX" and insn.mode in (IMM, DP, ABS))
+                or (insn.mnem == "SBC" and insn.mode in (IMM, ABS))
+                or (insn.mnem == "SBC" and insn.mode == DP and insn.m_flag == 1)
+                # Word RMW writes require their own bus-order validation.
+                or (insn.mnem in ("INC", "DEC", "ASL", "ROL") and insn.mode == DP
+                    and insn.m_flag == 1)
                 or (insn.mnem in ("ASL", "INC") and insn.mode == ACC)
                 or (insn.mnem in branches and insn.mode in (REL, REL16))
                 or direct_call or direct_long_tail(insn, ops))
