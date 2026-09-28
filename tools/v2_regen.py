@@ -1202,6 +1202,8 @@ def main() -> int:
         except Exception as e:
             print(f"  PARSE-FAIL bank ${bank:02X}: {type(e).__name__}: {e}")
             continue
+        if cfg.interpret_only:
+            p.error('interpret_only requires manifest-driven tools/v2_emit.py')
         parsed.append((bank, cfg_path, cfg))
         for entry in cfg.entries:
             if entry.name:

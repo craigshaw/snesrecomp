@@ -404,8 +404,17 @@ def build_emission_entries(manifest: ProgramManifest, parsed,
      templates_any, cfg_by_bank) = _cfg_name_maps(parsed)
     entries_by_bank = defaultdict(list)
     emitted = defaultdict(set)
+    # Emission policy is independent of exit analysis. These boundaries are
+    # decoded by either analyzer, including their normal proof dependencies,
+    # but always dispatch through the interpreter at every entry width.
+    interpreted = {pc for _bank, _path, cfg in parsed
+                   for pc in getattr(cfg, 'interpret_only', ())}
+    interpreted.update(mirror for pc in tuple(interpreted)
+                       if (mirror := _lorom_mirror_pc24(pc)) is not None)
 
     for key, node in sorted(manifest.nodes.items()):
+        if key.pc24 in interpreted:
+            continue
         bank = (key.pc24 >> 16) & 0xFF
         cfg = _cfg_for_bank(cfg_by_bank, bank)
         pc16 = key.pc24 & 0xFFFF

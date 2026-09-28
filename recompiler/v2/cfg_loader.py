@@ -31,6 +31,9 @@ v2 KEEPS:
 - `force_lle <pc24>` — keep an exact architectural function boundary on
   the interpreter tier even when profile promotion or static reachability
   would otherwise materialise it as native code.
+- `interpret_only <pc24>`: analyze reachable code and infer exits normally,
+  but exclude all entry variants and LoROM mirrors from manifest-driven AOT
+  emission. This does not add a root or declare an exit contract.
 - `exclude_range <start> <end>` — data region carved out of decode.
 - `data_region <bank> <start> <end>` — same idea, cross-bank.
 
@@ -89,6 +92,8 @@ class BankCfg:
     # rely on behavior (for example return-stack rewriting) that the native
     # callable ABI cannot represent.
     force_lle: set = field(default_factory=set)
+    # Analyze reachable code normally, but never materialize these addresses.
+    interpret_only: set = field(default_factory=set)
     exclude_ranges: List[Tuple[int, int]] = field(default_factory=list)
     data_regions: List[Tuple[int, int, int]] = field(default_factory=list)  # (bank, start, end)
     # exit_mx_at directives: list of (bank, addr16, m, x) — annotates the
@@ -386,19 +391,23 @@ def load_bank_cfg(path: str) -> BankCfg:
             # the interpreter tier. The address is deliberately absolute so
             # a directive can live in a minimal bank00.cfg while naming any
             # ROM bank discovered from a profile manifest.
-            if head == 'force_lle':
+            if head in ('force_lle', 'interpret_only'):
                 if len(tokens) != 2:
                     raise ValueError(
-                        f"{path}: force_lle needs <pc24>, got: {stripped!r}")
+                        f"{path}: {head} needs <pc24>, got: {stripped!r}")
                 try:
-                    pc24 = _parse_hex(tokens[1]) & 0xFFFFFF
+                    pc24 = _parse_hex(tokens[1])
+                    if head == 'interpret_only' and not 0 <= pc24 <= 0xFFFFFF:
+                        raise ValueError('address must fit 24 bits')
+                    pc24 &= 0xFFFFFF
                 except ValueError as e:
                     raise ValueError(
-                        f"{path}: force_lle bad pc24 {tokens[1]!r}: {e}")
-                if pc24 in cfg.force_lle:
+                        f"{path}: {head} bad pc24 {tokens[1]!r}: {e}")
+                boundaries = getattr(cfg, head)
+                if pc24 in boundaries:
                     raise ValueError(
-                        f"{path}: force_lle duplicate boundary ${pc24:06X}")
-                cfg.force_lle.add(pc24)
+                        f"{path}: {head} duplicate boundary ${pc24:06X}")
+                boundaries.add(pc24)
                 continue
 
             # force_variant_at <site_pc24> <m> <x> — pin the variant

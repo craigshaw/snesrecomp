@@ -110,6 +110,8 @@ pub struct BankCfg {
     pub symbols: Vec<NameDecl>,
     /// Exact 24-bit executable function boundaries which must remain LLE.
     pub force_lle: BTreeSet<u32>,
+    /// Emission-only exclusions. Reachable code still participates in analysis.
+    pub interpret_only: BTreeSet<u32>,
     pub exclude_ranges: Vec<(u32, u32)>,
     pub data_regions: Vec<(u32, u32, u32)>, // (bank, start, end)
     pub reloc_regions: Vec<RelocRegion>,
@@ -315,14 +317,22 @@ pub fn parse_bank_cfg(text: &str, path: &str) -> Result<BankCfg, String> {
             continue;
         }
         // force_lle <pc24>
-        if head == "force_lle" {
+        if head == "force_lle" || head == "interpret_only" {
             if tokens.len() != 2 {
-                return Err(format!("{path}: force_lle needs <pc24>, got: {stripped:?}"));
+                return Err(format!("{path}: {head} needs <pc24>, got: {stripped:?}"));
             }
-            let pc24 =
-                parse_hex(tokens[1]).map_err(|e| format!("{path}: force_lle {e}"))? & 0xFFFFFF;
-            if !cfg.force_lle.insert(pc24) {
-                return Err(format!("{path}: force_lle duplicate boundary ${pc24:06X}"));
+            let raw = parse_hex(tokens[1]).map_err(|e| format!("{path}: {head} {e}"))?;
+            if head == "interpret_only" && raw > 0xFFFFFF {
+                return Err(format!("{path}: interpret_only address must fit 24 bits"));
+            }
+            let pc24 = raw & 0xFFFFFF;
+            let boundaries = if head == "force_lle" {
+                &mut cfg.force_lle
+            } else {
+                &mut cfg.interpret_only
+            };
+            if !boundaries.insert(pc24) {
+                return Err(format!("{path}: {head} duplicate boundary ${pc24:06X}"));
             }
             continue;
         }
@@ -1139,5 +1149,16 @@ mod tests {
         let cfg = parse_bank_cfg("bank = 00\nforce_lle 038DA0\n", "t").unwrap();
         assert_eq!(cfg.force_lle, BTreeSet::from([0x038DA0]));
         assert!(parse_bank_cfg("bank = 00\nforce_lle 038DA0\nforce_lle 038DA0\n", "t").is_err());
+    }
+
+    #[test]
+    fn interpret_only_is_separate_from_force_lle() {
+        let cfg = parse_bank_cfg("bank = 00\ninterpret_only 038DA0\n", "t").unwrap();
+        assert_eq!(cfg.interpret_only, BTreeSet::from([0x038DA0]));
+        assert!(cfg.force_lle.is_empty());
+        for args in ["", "-1", "1000000", "038DA0 extra", "xyz",
+                     "038DA0\ninterpret_only 038DA0"] {
+            assert!(parse_bank_cfg(&format!("bank = 00\ninterpret_only {args}\n"), "t").is_err());
+        }
     }
 }

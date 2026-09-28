@@ -27,3 +27,27 @@ one entry width does not support other widths. A declaration does not prove
 that a routine returns on every path, and it does not validate compiled timing.
 Do not use it to hide an unresolved return convention or force compilation.
 The legacy `exit_mx_at <pc24> <exit_m> <exit_x>` keeps its address-wide behavior.
+
+## Analyze code that remains interpreted
+
+`interpret_only <pc24>` is an emission policy for the manifest-driven pipeline.
+Reachable code and its dependencies still participate in the normal exit
+solver. The named address and its valid LoROM mirror have no AOT body at any
+entry width. This does not add a root, assert an exit width, or bypass an
+unresolved path. Exit proofs remain keyed by exact entry M/X.
+
+Use `force_lle` when analysis itself must stop at the boundary, for example
+when the callable boundary is unsafe to decode. It takes precedence if both
+directives name an address. Use `interpret_only` when the code is suitable for
+analysis but its generated execution has not passed validation. Apply it to
+each unvalidated dependency as well: it does not exclude an entire call tree.
+
+Both analyzers retain the same proof rules. The common emitter applies the
+selection after analysis, including when it consumes a native manifest.
+An analysis manifest can therefore mark an interpreted node `aot_eligible`;
+that means the analysis succeeded, not that a body was emitted. Read the
+emitter count or dispatch table to measure actual AOT coverage. An explicit
+emission exclusion also takes precedence over an HLE annotation.
+
+This directive is supported by `v2_emit.py`, not the legacy `v2_regen.py`
+emission path.
