@@ -95,6 +95,12 @@ static inline void cpu_aot_insn_write16(CpuState *cpu, CpuAotInstructionTiming *
     cpu_aot_insn_bus_extra(timing, bank, addr, 2);
     cpu_write16(cpu, bank, addr, value);
 }
+static inline void cpu_aot_insn_write16_reverse(CpuState *cpu,
+                                               CpuAotInstructionTiming *timing,
+                                               uint8 bank, uint16 addr, uint16 value) {
+    cpu_aot_insn_write8(cpu, timing, bank, (uint16)(addr + 1), (uint8)(value >> 8));
+    cpu_aot_insn_write8(cpu, timing, bank, addr, (uint8)value);
+}
 static inline void cpu_aot_insn_commit(CpuState *cpu, CpuAotInstructionTiming *timing,
                                       uint32 pc, int audit) {
     if (audit) interp_bridge_event_audit_charge(cpu, pc, timing->master);

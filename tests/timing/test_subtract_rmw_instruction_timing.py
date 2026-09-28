@@ -76,7 +76,7 @@ class SubtractRmwTiming(unittest.TestCase):
         with patch.dict(os.environ, {"SNESRECOMP_EMIT_INSTRUCTION_TIMING": "008000:1:0"}):
             for code in ([0xC2, 0x20, 0xE6, 0x40, 0x6B],
                          [0xEE, 0x40, 0, 0x6B], [0xD6, 0x40, 0x6B],
-                         [0xC2, 0x20, 0x26, 0x40, 0x6B]):
+                         [0xC2, 0x20, 0x06, 0x40, 0x6B]):
                 with self.subTest(code=code), self.assertRaises(ValueError):
                     timing.emit_function(bytes(code) + bytes(32768-len(code)),
                                          bank=0, start=0x8000, entry_m=1, entry_x=0)

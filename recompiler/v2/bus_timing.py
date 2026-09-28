@@ -91,6 +91,8 @@ def validate_instruction_leaf(block_pairs, cfg):
                  and insn.mode == IMP)
                 or (insn.mnem in ("PHA", "PLA") and insn.mode == IMP
                     and insn.m_flag == 1)
+                or (insn.mnem in ("PHX", "PLX") and insn.mode == IMP
+                    and insn.x_flag == 0)
                 # Index-width changes need separate narrowing/resume support.
                 or (insn.mnem in ("REP", "SEP") and insn.mode == IMM
                     and not (insn.operand & 0x10))
@@ -100,11 +102,14 @@ def validate_instruction_leaf(block_pairs, cfg):
                 or (insn.mnem == "ORA" and insn.mode == IMM)
                 or (insn.mnem == "CPX" and insn.mode in (IMM, DP, ABS))
                 or (insn.mnem == "SBC" and insn.mode in (IMM, ABS))
-                or (insn.mnem == "SBC" and insn.mode == DP and insn.m_flag == 1)
-                # Word RMW writes require their own bus-order validation.
+                or (insn.mnem == "SBC" and insn.mode == DP)
+                # Only these tested word RMW forms use reverse byte writes.
+                or (insn.mnem in ("ROL", "LSR") and insn.mode == DP
+                    and insn.m_flag == 0)
                 or (insn.mnem in ("INC", "DEC", "ASL", "ROL") and insn.mode == DP
                     and insn.m_flag == 1)
                 or (insn.mnem in ("ASL", "INC") and insn.mode == ACC)
+                or (insn.mnem == "ROR" and insn.mode == ACC and insn.m_flag == 0)
                 or (insn.mnem in branches and insn.mode in (REL, REL16))
                 or direct_call or direct_long_tail(insn, ops))
             if not supported:
@@ -112,10 +117,10 @@ def validate_instruction_leaf(block_pairs, cfg):
             returns += insn.mnem in ("RTS", "RTL") or direct_long_tail(insn, ops)
     if not returns:
         raise ValueError("instruction timing requires a reachable RTS, RTL or direct JML")
-    if any(insn.mnem in ("PHA", "PLA")
+    if any(insn.mnem in ("PHA", "PLA", "PHX", "PLX")
            for pairs in block_pairs.values() for insn, _ in pairs):
-        # Restrict this support to local byte-stack brackets. Equal depth at
-        # joins also rejects loops that accumulate pushes or consume frames.
+        # Track bytes in local stack brackets, including X0 word saves.
+        # Equal depth at joins rejects loops that accumulate or consume frames.
         depths = {cfg.entry: 0}
         pending = [cfg.entry]
         while pending:
@@ -126,6 +131,10 @@ def validate_instruction_leaf(block_pairs, cfg):
                     depth += 1
                 elif insn.mnem == "PLA":
                     depth -= 1
+                elif insn.mnem == "PHX":
+                    depth += 2
+                elif insn.mnem == "PLX":
+                    depth -= 2
                 if depth < 0:
                     raise ValueError("instruction timing cannot pull the caller's frame")
                 if depth and (insn.mnem in ("RTS", "RTL", "JSR", "JSL")
@@ -168,12 +177,20 @@ class InstructionTimingLines(BusTimingLines):
     def append(self, line):
         line = re.sub(r"\bcpu_(read|write)(8|16)\(cpu,\s*",
                       lambda m: f"cpu_aot_insn_{m[1]}{m[2]}(cpu, &_aot_timing, ", line)
+        if getattr(self, "reverse_word_write", False):
+            line = line.replace("cpu_aot_insn_write16(",
+                                "cpu_aot_insn_write16_reverse(")
         line = line.replace("cpu->cycles +=", "_aot_timing.cycles +=")
         line = line.replace("cpu->master_cycles +=", "_aot_timing.master +=")
         list.append(self, line)
 
     def instruction(self, insn, cycles):
         self.pc = insn.addr & 0xFFFFFF
+        # Word ROL/LSR dp and PHX write high byte before low byte.
+        # Keep ordinary stores and unselected generation unchanged.
+        self.reverse_word_write = (
+            (insn.m_flag == 0 and insn.opcode in (0x26, 0x46))
+            or (insn.x_flag == 0 and insn.mnem == "PHX"))
         self.extend([
             "if (interp_bridge_lle_instruction_boundary_reached(cpu)) {",
             f"  return interp_bridge_lle_yield_unwind(cpu, 0x{self.pc:06X}u);",
