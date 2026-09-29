@@ -156,6 +156,10 @@ int main(int argc, char **argv) {
             event_body = test->body;
             interp_bridge_set_continuations(test->continuations, test->continuation_count);
         }
+        else if (!strcmp(argv[2], "event-continuation")) {
+            /* Start interpreted, including local saves before the first entry. */
+            interp_bridge_set_continuations(test->continuations, test->continuation_count);
+        }
         else if (strcmp(argv[2], "event-interp")) return 2;
         g_c.S = 0x01FF;
         const uint8 scheduler[] = {0x22, test->pc, test->pc >> 8, test->pc >> 16,

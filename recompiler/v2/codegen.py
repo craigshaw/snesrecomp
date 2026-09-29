@@ -569,7 +569,8 @@ def _emit_write(op: Write) -> List[str]:
 
 
 def _bus_address_once(seg, bank, addr):
-    if (bus_timing.enabled() and seg.kind == SegKind.DP_INDIRECT_LONG
+    if ((bus_timing.enabled() or bus_timing.instruction_enabled())
+            and seg.kind == SegKind.DP_INDIRECT_LONG
             and seg.index is not None):
         # Both bank/offset expressions otherwise evaluate the same pointer
         # reads. Materialise once so the pointer contributes three bus bytes.

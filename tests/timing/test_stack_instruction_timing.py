@@ -44,7 +44,7 @@ class StackInstructionTiming(unittest.TestCase):
             [0x48, 0x6B],  # Returning with live local data.
             [0x48, 0xD0, 0xFD, 0x68, 0x6B],  # Growing stack loop.
             [0xAD, 0, 0x10, 0xD0, 1, 0x48, 0x68, 0x6B],  # Unequal join.
-            [0xC2, 0x20, 0x48, 0x68, 0x6B],  # Untested word stack.
+            [0xC2, 0x20, 0x48, 0x6B],  # Word save remains at return.
             [0x48, 0x22, 0, 0x81, 0, 0x68, 0x6B],  # Live data across call.
         ]
         with patch.dict(os.environ, {"SNESRECOMP_EMIT_INSTRUCTION_TIMING": "008000:1:0"}):

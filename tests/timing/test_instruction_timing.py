@@ -136,7 +136,7 @@ class InstructionTiming(unittest.TestCase):
         with patch.dict(os.environ, {"SNESRECOMP_EMIT_BUS_TIMING": "1",
                                     bus_timing.INSTRUCTION_ENV: "008000:1:0"}):
             for code in ([0xFC, 0x10, 0x80, 0x6B], [0x22, 0, 0x10, 0, 0x6B],
-                         [0xC2, 0x20, 0x48, 0x68, 0x6B],
+                         [0xC2, 0x20, 0x48, 0x6B],
                          [0xB1, 0x40, 0x6B], [0x40], [0xEE, 0, 0x10, 0x6B]):
                 with self.assertRaises(ValueError):
                     timing.emit_function(bytes(code) + bytes(32768-len(code)),

@@ -4,6 +4,7 @@ import re
 from dataclasses import fields, is_dataclass
 
 from v2.ir import Value
+from snes65816 import ABS
 
 ENV = "SNESRECOMP_EMIT_CONTINUATIONS"
 
@@ -45,18 +46,19 @@ def _values(value):
 
 
 def validate(points, block_pairs, depths, graph, entry_s_offset):
-    """Require balanced block entries and no host temporaries from a predecessor."""
+    """Require a proven local stack depth and no predecessor host temporaries."""
     if entry_s_offset or graph.const_z_folds:
         raise ValueError("continuations require plain stack entries and no folded branches")
     keys = {(k.pc, k.m, k.x): k for k in block_pairs}
     for point in points:
-        if point not in keys or depths.get(keys[point]) != 0:
-            raise ValueError(f"continuation {point} is not a balanced exact block entry")
+        depth = depths.get(keys.get(point))
+        if depth is None or not 0 <= depth < 0x10000:
+            raise ValueError(f"continuation {point} is not a proven exact block entry")
     for pairs in block_pairs.values():
         defined = set()
         for insn, ops in pairs:
             # External tail obligations need a separate continuation contract.
-            if insn.mnem == "JMP":
+            if insn.mnem == "JMP" and insn.mode != ABS:
                 raise ValueError("continuations do not yet support JMP tails")
             for op in ops:
                 for field in fields(op):
@@ -66,3 +68,4 @@ def validate(points, block_pairs, depths, graph, entry_s_offset):
                 out = getattr(op, "out", None)
                 if isinstance(out, Value):
                     defined.add(out)
+    return {point: depths[keys[point]] for point in points}

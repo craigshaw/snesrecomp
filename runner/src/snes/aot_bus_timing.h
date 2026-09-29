@@ -85,6 +85,14 @@ static inline uint16 cpu_aot_insn_read16(CpuState *cpu, CpuAotInstructionTiming 
     g_aot_instruction_read_active = saved;
     return value;
 }
+static inline uint16 cpu_aot_insn_read16_linear(CpuState *cpu,
+                                               CpuAotInstructionTiming *timing,
+                                               uint8 bank, uint16 addr) {
+    uint32 next = ((((uint32)bank << 16) | addr) + 1u) & 0xFFFFFFu;
+    uint16 low = cpu_aot_insn_read8(cpu, timing, bank, addr);
+    return low | ((uint16)cpu_aot_insn_read8(cpu, timing, (uint8)(next >> 16),
+                                          (uint16)next) << 8);
+}
 static inline void cpu_aot_insn_write8(CpuState *cpu, CpuAotInstructionTiming *timing,
                                       uint8 bank, uint16 addr, uint8 value) {
     cpu_aot_insn_bus_extra(timing, bank, addr, 1);

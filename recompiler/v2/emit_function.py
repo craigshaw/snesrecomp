@@ -149,8 +149,11 @@ def _dynamic_charge_lines(insn, speed_expr: str = "8",
                 f"cpu->master_cycles += {speed_expr}; }}"
                 f"  /* abs,X read page-cross */")
         elif mode == _MODE_ABS_Y:
+            # Keep legacy modes unchanged; the new timed word ORA also
+            # counts a crossing when a large index carries into another bank.
+            page_mask = '0xFFFF00' if bus_timing.linear_word_read(insn) else '0xFF00'
             out.append(
-                f"if ((0x{base:04X} & 0xFF00) != ((0x{base:04X} + cpu->Y) & 0xFF00))"
+                f"if ((0x{base:04X} & {page_mask}) != ((0x{base:04X} + cpu->Y) & {page_mask}))"
                 f" {{ {audit_call}cpu->cycles += 1; "
                 f"cpu->master_cycles += {speed_expr}; }}"
                 f"  /* abs,Y read page-cross */")
@@ -851,7 +854,8 @@ def emit_function(rom: bytes, bank: int, start: int,
     if instruction_timing:
         depths = bus_timing.validate_instruction_leaf(block_per_insn_ir, cfg)
         if resume_points:
-            continuations.validate(resume_points, block_per_insn_ir, depths, graph, entry_s_offset)
+            resume_depths = continuations.validate(
+                resume_points, block_per_insn_ir, depths, graph, entry_s_offset)
 
     # ── Non-local-return idiom detection ────────────────────────────────
     # A basic block is an NLR-block if its IR has the shape
@@ -2183,6 +2187,16 @@ def emit_function(rom: bytes, bank: int, start: int,
             f'  /* entry_s_offset:{entry_s_offset} — caller left stack imbalanced */')
     else:
         src.append(f'  uint16 _entry_s = cpu->S;')
+    if resume_points and any(resume_depths.values()):
+        # Local saves remain on the guest stack across interpreter execution.
+        # Reconstruct the owning frame's entry S without touching those bytes.
+        src.append('  switch ((_aot_resume << 2) | (cpu->m_flag << 1) | cpu->x_flag) {')
+        for (pc, m, x), depth in sorted(resume_depths.items()):
+            if depth:
+                src.append(f'    case 0x{((pc << 2) | (m << 1) | x):08X}u: '
+                           f'_entry_s = (uint16)(cpu->S + {depth}u); break;')
+        src.append('    default: break;')
+        src.append('  }')
     # Option-1 cpu->S return-frame ABI (see IMPROVEMENTS.md): capture whether
     # a paired host-C caller exists at entry. RTS/RTL may host-return NORMAL
     # only when _hrv==1 AND the stack is balanced (cpu->S == _entry_s);

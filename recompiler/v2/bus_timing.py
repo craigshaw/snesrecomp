@@ -14,6 +14,16 @@ from v2 import continuations
 BUS_TARGETS_ENV = "SNESRECOMP_EMIT_BUS_TIMING_TARGETS"
 _selected_bus_timing = ContextVar("selected_bus_timing", default=False)
 _selected_continuation = ContextVar("selected_continuation", default=False)
+_selected_instruction_timing = ContextVar("selected_instruction_timing", default=False)
+
+
+def instruction_enabled():
+    return _selected_instruction_timing.get()
+
+
+def linear_word_read(insn):
+    """The newly supported word ORA abs,Y uses a 24-bit data address."""
+    return instruction_enabled() and insn.opcode == 0x19 and insn.m_flag == 0
 
 
 def continuation_enabled():
@@ -55,9 +65,11 @@ def scope_function(emitter):
         key = (((bank & 0xFF) << 16) | (start & 0xFFFF), entry_m, entry_x)
         token = _selected_bus_timing.set(key in bus_targets())
         resume_token = _selected_continuation.set(key in continuations.selections())
+        instruction_token = _selected_instruction_timing.set(key in instruction_targets())
         try:
             return emitter(rom, bank, start, entry_m, entry_x, **kwargs)
         finally:
+            _selected_instruction_timing.reset(instruction_token)
             _selected_continuation.reset(resume_token)
             _selected_bus_timing.reset(token)
     return scoped
@@ -66,7 +78,7 @@ def scope_function(emitter):
 def validate_instruction_leaf(block_pairs, cfg):
     """Accept native bodies with tested control flow, arithmetic and status."""
     from snes65816 import (IMP, ACC, IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X,
-                          DP, DP_X, DP_Y, REL, REL16)
+                          DP, DP_X, DP_Y, REL, REL16, INDIR_LY)
     from v2.ir import Call, Goto
     def direct_long_tail(insn, ops):
         return (insn.mnem == 'JMP' and insn.mode == LONG
@@ -95,12 +107,13 @@ def validate_instruction_leaf(block_pairs, cfg):
                                    and not op.terminal and not op.noreturn
                                    and op.target is not None for op in ops))
             supported = (
-                (insn.mnem in ("RTS", "RTL", "NOP", "CLC", "SEC", "DEY", "INX", "DEX", "TYA", "XBA")
+                (insn.mnem in ("RTS", "RTL", "NOP", "CLC", "SEC", "DEY", "INY", "INX", "DEX", "TYA", "XBA")
                  and insn.mode == IMP)
-                or (insn.mnem in ("PHA", "PLA") and insn.mode == IMP
-                    and insn.m_flag == 1)
-                or (insn.mnem in ("PHX", "PLX") and insn.mode == IMP
+                or (insn.mnem in ("PHA", "PLA") and insn.mode == IMP)
+                or (insn.mnem in ("PHX", "PLX", "PHY", "PLY") and insn.mode == IMP
                     and insn.x_flag == 0)
+                or (insn.mnem in ("TXA", "TAX", "TAY") and insn.mode == IMP
+                    and insn.m_flag == 0 and insn.x_flag == 0)
                 # Index-width changes need separate narrowing/resume support.
                 or (insn.mnem in ("REP", "SEP") and insn.mode == IMM
                     and not (insn.operand & 0x10))
@@ -108,17 +121,27 @@ def validate_instruction_leaf(block_pairs, cfg):
                                   "CMP", "ADC", "AND", "EOR", "BIT")
                     and insn.mode in data_modes)
                 or (insn.mnem == "ORA" and insn.mode == IMM)
+                or (insn.mnem == "ORA" and insn.mode == ABS_Y and insn.m_flag == 0)
+                or (insn.mnem in ("LDA", "SBC") and insn.mode == INDIR_LY
+                    and insn.m_flag == 1 and insn.x_flag == 0)
                 or (insn.mnem == "CPX" and insn.mode in (IMM, DP, ABS))
                 or (insn.mnem == "SBC" and insn.mode in (IMM, ABS))
                 or (insn.mnem == "SBC" and insn.mode == DP)
                 # Only these tested word RMW forms use reverse byte writes.
-                or (insn.mnem in ("ROL", "LSR") and insn.mode == DP
+                or (insn.mnem in ("ROL", "LSR", "DEC") and insn.mode == DP
                     and insn.m_flag == 0)
                 or (insn.mnem in ("INC", "DEC", "ASL", "ROL") and insn.mode == DP
                     and insn.m_flag == 1)
                 or (insn.mnem in ("ASL", "INC") and insn.mode == ACC)
                 or (insn.mnem == "ROR" and insn.mode == ACC and insn.m_flag == 0)
+                or (insn.mnem == "LSR" and insn.mode == ACC and insn.m_flag == 0)
                 or (insn.mnem in branches and insn.mode in (REL, REL16))
+                or (insn.mnem == "JMP" and insn.mode == ABS
+                    and len(successors) == 1 and successors[0] in block_pairs
+                    and any(isinstance(op, Goto) for op in ops)
+                    and not getattr(insn, 'dispatch_entries', None)
+                    and not getattr(insn, 'dispatch_runtime', False)
+                    and not getattr(insn, 'return_trampoline', False))
                 or direct_call or direct_long_tail(insn, ops))
             if not supported:
                 raise ValueError(f"instruction timing does not yet support {insn.mnem} at {insn.addr:06X}")
@@ -134,12 +157,12 @@ def validate_instruction_leaf(block_pairs, cfg):
         depth = depths[key]
         for insn, ops in block_pairs[key]:
             if insn.mnem == "PHA":
-                depth += 1
+                depth += 1 if insn.m_flag else 2
             elif insn.mnem == "PLA":
-                depth -= 1
-            elif insn.mnem == "PHX":
+                depth -= 1 if insn.m_flag else 2
+            elif insn.mnem in ("PHX", "PHY"):
                 depth += 2
-            elif insn.mnem == "PLX":
+            elif insn.mnem in ("PLX", "PLY"):
                 depth -= 2
             if depth < 0:
                 raise ValueError("instruction timing cannot pull the caller's frame")
@@ -184,6 +207,8 @@ class InstructionTimingLines(BusTimingLines):
     def append(self, line):
         line = re.sub(r"\bcpu_(read|write)(8|16)\(cpu,\s*",
                       lambda m: f"cpu_aot_insn_{m[1]}{m[2]}(cpu, &_aot_timing, ", line)
+        if getattr(self, "linear_word_read", False):
+            line = line.replace("cpu_aot_insn_read16(", "cpu_aot_insn_read16_linear(")
         if getattr(self, "reverse_word_write", False):
             line = line.replace("cpu_aot_insn_write16(",
                                 "cpu_aot_insn_write16_reverse(")
@@ -193,11 +218,13 @@ class InstructionTimingLines(BusTimingLines):
 
     def instruction(self, insn, cycles):
         self.pc = insn.addr & 0xFFFFFF
-        # Word ROL/LSR dp and PHX write high byte before low byte.
+        self.linear_word_read = linear_word_read(insn)
+        # Selected word RMW and register saves write high byte first.
         # Keep ordinary stores and unselected generation unchanged.
         self.reverse_word_write = (
-            (insn.m_flag == 0 and insn.opcode in (0x26, 0x46))
-            or (insn.x_flag == 0 and insn.mnem == "PHX"))
+            (insn.m_flag == 0 and (insn.opcode in (0x26, 0x46, 0xC6)
+                                  or insn.mnem == "PHA"))
+            or (insn.x_flag == 0 and insn.mnem in ("PHX", "PHY")))
         self.extend([
             "if (interp_bridge_lle_instruction_boundary_reached(cpu)) {",
             f"  return interp_bridge_lle_yield_unwind(cpu, 0x{self.pc:06X}u);",

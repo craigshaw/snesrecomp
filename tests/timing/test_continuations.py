@@ -63,12 +63,12 @@ class Continuations(unittest.TestCase):
                           '008000:1:0>008003:1:0,008010:1:0>008003:1:0'):
             with self.subTest(selection=selection), patch.dict(os.environ, {continuations.ENV:selection}):
                 with self.assertRaises(ValueError): continuations.selections()
-        # Mid-instruction, wrong width, nonzero local stack, absent timing,
+        # Mid-instruction, wrong width, non-block entry, absent timing,
         # and a JMP tail must not become continuation entries.
         for code, point, timed in [
                 ([0xA2,3,0,0xCA,0xD0,0xFD,0x6B], '008004:1:0', True),
                 ([0xA2,3,0,0xCA,0xD0,0xFD,0x6B], '008003:0:0', True),
-                ([0x48,0xD0,0,0x68,0x6B], '008003:1:0', True),
+                ([0x48,0xD0,0,0x68,0x6B], '008004:1:0', True),
                 ([0xA2,3,0,0xCA,0xD0,0xFD,0x6B], '008003:1:0', False),
                 ([0xA2,3,0,0xCA,0xD0,0xFD,0x5C,0,0x81,0], '008003:1:0', True)]:
             with patch.dict(os.environ, {continuations.ENV:f'008000:1:0>{point}',
