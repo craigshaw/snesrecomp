@@ -532,6 +532,24 @@ def emit_dispatch_table(manifest: ProgramManifest, emitted_variants: Mapping,
         "",
     ])
 
+    from v2 import continuations
+    selected = continuations.selections()
+    if selected:
+        rows = []
+        for root, points in selected.items():
+            pc, m, x = root
+            if (m, x) not in emitted_variants.get(pc, ()):
+                raise ValueError(f"continuation owner {root} is not emitted")
+            name = f"{base_name(pc)}_M{m}X{x}"
+            for point in sorted(points):
+                wrapper = name + continuations.suffix(point)
+                lines.append(f"RecompReturn {wrapper}(CpuState *cpu);")
+                rows.append((point, pc, wrapper))
+        lines.append("const CpuContinuationEntry g_aot_continuations[] = {")
+        for (pc, m, x), owner, wrapper in sorted(rows):
+            lines.append(f"  {{0x{pc:06X}u, 0x{owner:06X}u, {m}, {x}, {wrapper}}},")
+        lines.extend(["};", f"const unsigned g_aot_continuation_count = {len(rows)};", ""])
+
     # RAM-routine guards: for a WRAM-resident AOT body ($7E/$7F), runtime
     # dispatch is allowed ONLY when the live WRAM bytes still hash-match the
     # exact snapshot that was recompiled. Any mismatch -> the faithful

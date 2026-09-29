@@ -278,3 +278,27 @@ register handler suppresses its legacy synthetic beam tick inside this scope;
 the shared instruction completion advances time. The HDMA/MMIO test verifies
 HBlank and auto-joypad phase, byte and mirrored word reads, scope restoration,
 and preservation of the legacy and interpreter read paths.
+
+## Selected scheduler continuations
+
+`SNESRECOMP_EMIT_CONTINUATIONS` accepts comma-separated
+`ROOT:M:X>BLOCK:M:X` selections. The root must already be emitted with
+instruction timing. Each block must be an exact internal CFG entry with
+zero local stack depth. The validator rejects predecessor temporaries,
+folded branches, external JMP tails, adjusted entry stacks and LLE guards.
+These entries do not add subroutine roots or exit declarations to analysis.
+
+The emitter writes a separate `g_aot_continuations` table and count. A host
+opts in with `interp_bridge_set_continuations`. Only the native whole-program
+scheduler uses the table. Runtime width lookup is exact; bounce exclusions
+and AOT denial still apply. A continuation pushes no guest return frame.
+RTS/RTL pops the real frame and yields its actual destination to the owning
+interpreter. Event yields use the same path. No host continuation state is
+retained across an interrupt.
+
+`test_continuations.py` compares real generated execution against the
+interpreter at deadlines and after single and repeated resumes. It covers
+local stack saves, width variants, compiled and interpreted callees, rewritten
+return frames, SlowROM/FastROM, NMI, IRQ and refresh. Unsupported entries fail
+closed. General arbitrary-PC resumption, emulation mode, tail obligations and
+nonzero local stack entries remain outside this contract.

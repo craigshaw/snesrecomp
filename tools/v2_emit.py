@@ -264,12 +264,14 @@ def main() -> int:
         from v2.bus_timing import bus_targets
         selected_bus_timing = sorted(bus_targets())
         instruction_timing = os.environ.get("SNESRECOMP_EMIT_INSTRUCTION_TIMING", "")
+        continuations = os.environ.get("SNESRECOMP_EMIT_CONTINUATIONS", "")
         return hashlib.sha256(
             (f"{tree_digest}\0aot_deny_gate={int(deny_gate)}"
              f"\0event_crossing_audit={int(event_audit)}"
              f"\0bus_timing={int(bus_timing)}"
              f"\0selected_bus_timing={selected_bus_timing}"
              f"\0instruction_timing={instruction_timing}"
+             f"\0continuations={continuations}"
              f"\0event_precision={event_precision}").encode()
         ).hexdigest()
 

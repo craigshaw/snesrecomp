@@ -8,10 +8,16 @@ import os
 import re
 from contextvars import ContextVar
 from functools import wraps
+from v2 import continuations
 
 
 BUS_TARGETS_ENV = "SNESRECOMP_EMIT_BUS_TIMING_TARGETS"
 _selected_bus_timing = ContextVar("selected_bus_timing", default=False)
+_selected_continuation = ContextVar("selected_continuation", default=False)
+
+
+def continuation_enabled():
+    return _selected_continuation.get()
 
 
 def enabled():
@@ -48,9 +54,11 @@ def scope_function(emitter):
     def scoped(rom, bank, start, entry_m, entry_x, **kwargs):
         key = (((bank & 0xFF) << 16) | (start & 0xFFFF), entry_m, entry_x)
         token = _selected_bus_timing.set(key in bus_targets())
+        resume_token = _selected_continuation.set(key in continuations.selections())
         try:
             return emitter(rom, bank, start, entry_m, entry_x, **kwargs)
         finally:
+            _selected_continuation.reset(resume_token)
             _selected_bus_timing.reset(token)
     return scoped
 
@@ -117,36 +125,35 @@ def validate_instruction_leaf(block_pairs, cfg):
             returns += insn.mnem in ("RTS", "RTL") or direct_long_tail(insn, ops)
     if not returns:
         raise ValueError("instruction timing requires a reachable RTS, RTL or direct JML")
-    if any(insn.mnem in ("PHA", "PLA", "PHX", "PLX")
-           for pairs in block_pairs.values() for insn, _ in pairs):
-        # Track bytes in local stack brackets, including X0 word saves.
-        # Equal depth at joins rejects loops that accumulate or consume frames.
-        depths = {cfg.entry: 0}
-        pending = [cfg.entry]
-        while pending:
-            key = pending.pop()
-            depth = depths[key]
-            for insn, ops in block_pairs[key]:
-                if insn.mnem == "PHA":
-                    depth += 1
-                elif insn.mnem == "PLA":
-                    depth -= 1
-                elif insn.mnem == "PHX":
-                    depth += 2
-                elif insn.mnem == "PLX":
-                    depth -= 2
-                if depth < 0:
-                    raise ValueError("instruction timing cannot pull the caller's frame")
-                if depth and (insn.mnem in ("RTS", "RTL", "JSR", "JSL")
-                              or direct_long_tail(insn, ops)):
-                    raise ValueError("instruction timing requires balanced stack at transfers")
-            for successor in cfg.blocks[key].successors:
-                if successor in depths:
-                    if depths[successor] != depth:
-                        raise ValueError("instruction timing requires equal stack depth at joins")
-                else:
-                    depths[successor] = depth
-                    pending.append(successor)
+    # Track bytes in local stack brackets, including X0 word saves.
+    # Equal depth at joins rejects loops that accumulate or consume frames.
+    depths = {cfg.entry: 0}
+    pending = [cfg.entry]
+    while pending:
+        key = pending.pop()
+        depth = depths[key]
+        for insn, ops in block_pairs[key]:
+            if insn.mnem == "PHA":
+                depth += 1
+            elif insn.mnem == "PLA":
+                depth -= 1
+            elif insn.mnem == "PHX":
+                depth += 2
+            elif insn.mnem == "PLX":
+                depth -= 2
+            if depth < 0:
+                raise ValueError("instruction timing cannot pull the caller's frame")
+            if depth and (insn.mnem in ("RTS", "RTL", "JSR", "JSL")
+                          or direct_long_tail(insn, ops)):
+                raise ValueError("instruction timing requires balanced stack at transfers")
+        for successor in cfg.blocks[key].successors:
+            if successor in depths:
+                if depths[successor] != depth:
+                    raise ValueError("instruction timing requires equal stack depth at joins")
+            else:
+                depths[successor] = depth
+                pending.append(successor)
+    return depths
 
 
 class BusTimingLines(list):

@@ -12,6 +12,9 @@ from .atomic_output import write_if_changed
 _TOP_LEVEL_CPU_FN_RE = re.compile(
     r"^(?:RecompReturn|void)\s+([A-Za-z_]\w*)\s*"
     r"\(CpuState\s*\*cpu\)\s*\{", re.MULTILINE)
+_CONTINUATION_GROUP_RE = re.compile(
+    r"^/\* AOT continuation group: ([A-Za-z_]\w*) \*/.*?"
+    r"^/\* End AOT continuation group \*/", re.MULTILINE | re.DOTALL)
 _VARIANT_CALL_NAME_RE = re.compile(
     r"\b([A-Za-z_]\w*_M[01]X[01])\s*\(\s*cpu\s*\)")
 _VARIANT_SUFFIX_RE = re.compile(r"_M[01]X[01]$")
@@ -63,7 +66,12 @@ def split_bank_translation_units(
             monolithic_name: _with_referenced_variant_declarations(source)
         }
 
-    matches = list(_TOP_LEVEL_CPU_FN_RE.finditer(source))
+    # The public root, continuation wrappers and shared static body must
+    # stay in the owner's shard, including the static forward declaration.
+    groups = list(_CONTINUATION_GROUP_RE.finditer(source))
+    matches = groups + [match for match in _TOP_LEVEL_CPU_FN_RE.finditer(source)
+                       if not any(g.start() <= match.start() < g.end() for g in groups)]
+    matches.sort(key=lambda match: match.start())
     if not matches:
         return {monolithic_name: source}
 

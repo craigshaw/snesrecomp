@@ -699,6 +699,17 @@ typedef enum InterpDeadlineEvent {
   INTERP_DEADLINE_EVENT_IRQ = 3,
 } InterpDeadlineEvent;
 int interp_bridge_in_lle_scheduler(void);
+/* Internal block entries are separate from subroutine dispatch. They run
+ * only under the whole-program scheduler and always yield an architectural
+ * next PC, including after a real RTS/RTL pop. The table is immutable and
+ * sorted by (pc24, m, x); pass NULL/0 to disable it. */
+typedef struct CpuContinuationEntry {
+  uint32 pc24, owner_pc24;
+  uint8 m, x;
+  RecompReturn (*body)(CpuState *cpu);
+} CpuContinuationEntry;
+void interp_bridge_set_continuations(const CpuContinuationEntry *entries,
+                                    unsigned count);
 int interp_bridge_lle_master_deadline_reached(const CpuState *cpu);
 RecompReturn interp_bridge_lle_yield_unwind(CpuState *cpu, uint32 resume_pc24);
 uint32 interp_bridge_lle_resume_pc(void);

@@ -90,6 +90,11 @@ def build(out: Path, cc: str, cases=None) -> Path:
         if case.get("instruction_timing"):
             os.environ["SNESRECOMP_EMIT_INSTRUCTION_TIMING"] = (
                 f"{pc:06X}:{case.get('m', 1)}:{case.get('xf', 0)}")
+        saved_continuations = os.environ.get("SNESRECOMP_EMIT_CONTINUATIONS")
+        if case.get("continuations"):
+            os.environ["SNESRECOMP_EMIT_CONTINUATIONS"] = ",".join(
+                f"{pc:06X}:{case.get('m', 1)}:{case.get('xf', 0)}>{point:06X}:{m}:{x}"
+                for point, m, x in case['continuations'])
         try:
             codegen.set_name_resolver({target: f"bank_{target >> 16:02X}_{target & 0xFFFF:04X}"
                                       for target in (*case.get("callees", []),
@@ -102,6 +107,10 @@ def build(out: Path, cc: str, cases=None) -> Path:
                                         entry_m=case.get("m", 1), entry_x=case.get("xf", 0),
                                         func_name=f"timing_case_{i}"))
         finally:
+            if saved_continuations is None:
+                os.environ.pop("SNESRECOMP_EMIT_CONTINUATIONS", None)
+            else:
+                os.environ["SNESRECOMP_EMIT_CONTINUATIONS"] = saved_continuations
             codegen.set_name_resolver({})
             codegen.set_valid_variants({})
             if saved_instruction_timing is None:
@@ -114,11 +123,20 @@ def build(out: Path, cc: str, cases=None) -> Path:
         bodies.append(f"static const TimingInit init_{i}[] = {{" +
                       (",".join(f"{{{addr},{value}}}" for addr, value in memory.items())
                        or "{0,0}") + "};")
+        from v2.continuations import suffix
+        for point, m, x in case.get('continuations', []):
+            target = name + suffix((point, m, x))
+            bodies.append(f"static RecompReturn counted_{target}(CpuState *cpu) {{ "
+                          f"timing_resume_entries++; return {target}(cpu); }}")
+        bodies.append(f"static const CpuContinuationEntry resumes_{i}[] = {{" +
+                      (",".join(f"{{{point},{pc},{m},{x},counted_{name}{suffix((point,m,x))}}}"
+                                for point,m,x in case.get('continuations', [])) or "{0}") + "};")
         table.append(f"{{code_{i}, sizeof(code_{i}), {pc}, "
                      f"{case.get('m', 1)}, {case.get('xf', 0)}, {case.get('db', 0)}, "
                      f"{case.get('x', 0)}, {case.get('y', 0)}, {case.get('d', 0)}, "
                      f"{case.get('memsel', 0)}, init_{i}, {len(memory)}, {name}, "
-                     f"{int(bool(case.get('instruction_timing')))}, {case.get('status', 4)}" + "}")
+                     f"{int(bool(case.get('instruction_timing')))}, {case.get('status', 4)}, "
+                     f"resumes_{i}, {len(case.get('continuations', []))}, {int(bool(case.get('short_call')))}" + "}")
     header = """typedef struct TimingInit { uint32 address; uint8 value; } TimingInit;
 typedef struct TimingCase {
     const uint8_t *code; int size; uint32 pc;
@@ -127,7 +145,11 @@ typedef struct TimingCase {
     RecompReturn (*body)(CpuState *);
     int instruction_timing;
     uint8 status;
+    const CpuContinuationEntry *continuations;
+    unsigned continuation_count;
+    int short_call;
 } TimingCase;
+static unsigned timing_resume_entries;
 """
     (out / "timing_cases.inc").write_text(
         header + "\n".join(bodies) + "\nstatic const TimingCase cases[] = {\n" +

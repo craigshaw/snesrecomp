@@ -490,3 +490,37 @@ def test_cross_bank_name_collision_falls_back_to_synthetic_name(tmp_path):
         f"duplicate symbol definition(s): {counts}"
     assert counts["Foo_M1X1"] == 1
     assert counts["bank_00_8100_M1X1"] == 1
+
+
+def test_continuation_selection_cache_and_dispatch_separation(tmp_path, monkeypatch):
+    rom, cfg, out = _fixture(tmp_path, target_opcode=0xEA)
+    data = bytearray(rom.read_bytes())
+    data[0x10:0x16] = bytes([0xA2, 3, 0xCA, 0xD0, 0xFD, 0x60])
+    rom.write_bytes(data)
+    monkeypatch.setenv('SNESRECOMP_EMIT_INSTRUCTION_TIMING', '008010:1:1')
+    monkeypatch.delenv('SNESRECOMP_EMIT_CONTINUATIONS', raising=False)
+    first = _run(rom, cfg, out)
+    assert first.returncode == 0, first.stdout + first.stderr
+    normal = (out / 'bank00_v2.c').read_bytes()
+    manifest = (out / 'program_manifest.json').read_bytes()
+    monkeypatch.setenv('SNESRECOMP_EMIT_CONTINUATIONS', '008010:1:1>008012:1:1')
+    selected = _run(rom, cfg, out)
+    assert selected.returncode == 0, selected.stdout + selected.stderr
+    assert 'reused verified published output' not in selected.stdout
+    assert (out / 'program_manifest.json').read_bytes() == manifest
+    dispatch = (out / 'dispatch_v2.c').read_text()
+    architectural = dispatch.split('const DispatchEntry g_dispatch_table[]')[1].split('};')[0]
+    assert '0x008012u' not in architectural
+    assert '{0x008012u, 0x008010u, 1, 1,' in dispatch
+    assert b'_resume_008012_M1X1' in (out / 'bank00_v2.c').read_bytes()
+    repeated = _run(rom, cfg, out)
+    assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+    assert 'reused verified published output' in repeated.stdout
+    monkeypatch.setenv('SNESRECOMP_EMIT_CONTINUATIONS', '008010:1:1>008013:1:1')
+    rejected = _run(rom, cfg, out)
+    assert rejected.returncode != 0
+    assert (out / 'program_manifest.json').read_bytes() == manifest
+    monkeypatch.delenv('SNESRECOMP_EMIT_CONTINUATIONS')
+    restored = _run(rom, cfg, out)
+    assert restored.returncode == 0, restored.stdout + restored.stderr
+    assert (out / 'bank00_v2.c').read_bytes() == normal

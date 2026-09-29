@@ -40,7 +40,7 @@ from v2.naming import (  # noqa: E402
     variant_suffix as _variant_suffix,
 )
 from v2.event_precision import load_event_precision_sites  # noqa: E402
-from v2 import bus_timing  # noqa: E402
+from v2 import bus_timing, continuations  # noqa: E402
 from snes_cycles import (  # noqa: E402
     block_static_cycles, instr_runtime_charges, region_speed,
 )
@@ -845,8 +845,13 @@ def emit_function(rom: bytes, bank: int, start: int,
 
     instruction_timing = (
         (bank << 16 | start, entry_m, entry_x) in bus_timing.instruction_targets())
+    resume_points = continuations.selections().get((bank << 16 | start, entry_m, entry_x), ())
+    if resume_points and (not instruction_timing or event_precision_function or has_lle_memory_poll):
+        raise ValueError("continuations require instruction timing without LLE guards")
     if instruction_timing:
-        bus_timing.validate_instruction_leaf(block_per_insn_ir, cfg)
+        depths = bus_timing.validate_instruction_leaf(block_per_insn_ir, cfg)
+        if resume_points:
+            continuations.validate(resume_points, block_per_insn_ir, depths, graph, entry_s_offset)
 
     # ── Non-local-return idiom detection ────────────────────────────────
     # A basic block is an NLR-block if its IR has the shape
@@ -2097,7 +2102,17 @@ def emit_function(rom: bytes, bank: int, start: int,
     src: List[str] = []
     if instruction_timing or bus_timing.enabled():
         src.append('#include "snes/aot_bus_timing.h"')
-    src.append(f"RecompReturn {func_name}(CpuState *cpu) {{")
+    if resume_points:
+        src.append(f"/* AOT continuation group: {func_name} */")
+        src.append(f"static RecompReturn {func_name}_body(CpuState *cpu, uint32 _aot_resume);")
+        src.append(f"RecompReturn {func_name}(CpuState *cpu) {{ return {func_name}_body(cpu, 0); }}")
+        for point in sorted(resume_points):
+            pc, m, x = point
+            src.append(f"RecompReturn {func_name}{continuations.suffix(point)}(CpuState *cpu) {{")
+            src.append(f"  return {func_name}_body(cpu, 0x{pc:06X}u); }}")
+        src.append(f"static RecompReturn {func_name}_body(CpuState *cpu, uint32 _aot_resume) {{")
+    else:
+        src.append(f"RecompReturn {func_name}(CpuState *cpu) {{")
     # Diagnostics — same call-stack plumbing v1 emitted, so the runtime
     # debug_server's `call_stack` cmd and crash-handler attribution work.
     src.append(f'  extern const char *g_last_recomp_func;')
@@ -2125,7 +2140,9 @@ def emit_function(rom: bytes, bank: int, start: int,
     src.append('  if (interp_bridge_lle_master_deadline_reached(cpu)) {')
     src.append('    RecompStackPop();')
     src.append(
-        f'    return interp_bridge_lle_yield_unwind(cpu, 0x{fn_entry_pc:06X}u);'
+        f'    return interp_bridge_lle_yield_unwind(cpu, '
+        + (f'_aot_resume ? _aot_resume : 0x{fn_entry_pc:06X}u);' if resume_points
+           else f'0x{fn_entry_pc:06X}u);')
     )
     src.append('  }')
     if has_lle_memory_poll:
@@ -2172,7 +2189,8 @@ def emit_function(rom: bytes, bank: int, start: int,
     # otherwise it dispatches on the popped PC. The caller sets
     # cpu->host_return_valid right before each invoke (direct call -> 1;
     # tail JMP/JML -> propagate the caller's _hrv; dispatch -> 0).
-    src.append(f'  uint8 _hrv = cpu->host_return_valid;')
+    src.append('  uint8 _hrv = _aot_resume ? 0 : cpu->host_return_valid;' if resume_points
+               else '  uint8 _hrv = cpu->host_return_valid;')
     src.append(f'  if (cpu_take_tailcall_return_context(&_entry_s, &_hrv)) {{')
     src.append(f'    cpu->host_return_valid = _hrv;')
     src.append(f'  }}')
@@ -2213,6 +2231,12 @@ def emit_function(rom: bytes, bank: int, start: int,
     # resolved to a SKIP_N non-local return (cpu_resolve_ancestor_skip).
     # Index by the just-pushed g_recomp_stack_top; pop is implicit (top--).
     src.append(f'  if (g_recomp_stack_top >= 1) g_cpu_entry_s[g_recomp_stack_top - 1] = _entry_s;')
+    if resume_points:
+        src.append('  switch ((_aot_resume << 2) | (cpu->m_flag << 1) | cpu->x_flag) {')
+        for pc, m, x in sorted(resume_points):
+            src.append(f'    case 0x{((pc << 2) | (m << 1) | x):08X}u: goto {_label_for(DecodeKey(pc, m, x))};')
+        src.append('    default: break;')
+        src.append('  }')
     for i, key in enumerate(block_order):
         src.append(f"  {_label_for(key)}:")
         # Trace block entry — gives us the SNES PC chain in the trace ring.
@@ -2277,6 +2301,8 @@ def emit_function(rom: bytes, bank: int, start: int,
     src.append("  RecompStackPop();")
     src.append("  return RECOMP_RETURN_NORMAL;")
     src.append("}")
+    if resume_points:
+        src.append("/* End AOT continuation group */")
     return "\n".join(src) + "\n"
 
 

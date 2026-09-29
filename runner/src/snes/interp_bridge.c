@@ -692,6 +692,30 @@ int rtl_aot_node_denied(uint32 pc24) {
 }
 
 int interp_bridge_in_lle_scheduler(void) { return s_lle_sched_depth > 0; }
+static const CpuContinuationEntry *s_continuations;
+static unsigned s_continuation_count;
+
+void interp_bridge_set_continuations(const CpuContinuationEntry *entries,
+                                    unsigned count) {
+    s_continuations = entries;
+    s_continuation_count = entries ? count : 0;
+}
+
+static const CpuContinuationEntry *find_continuation(uint32 pc, int m, int x) {
+    if (!s_continuation_count || pc < s_continuations[0].pc24 ||
+        pc > s_continuations[s_continuation_count - 1].pc24) return NULL;
+    const uint32 key = (pc << 2) | (m << 1) | x;
+    unsigned lo = 0, hi = s_continuation_count;
+    while (lo < hi) {
+        unsigned mid = lo + (hi - lo) / 2;
+        const CpuContinuationEntry *entry = &s_continuations[mid];
+        uint32 candidate = (entry->pc24 << 2) | (entry->m << 1) | entry->x;
+        if (candidate < key) lo = mid + 1;
+        else if (candidate > key) hi = mid;
+        else return entry;
+    }
+    return NULL;
+}
 uint32 interp_bridge_lle_resume_pc(void) { return s_lle_resume_pc24; }
 
 int interp_bridge_lle_took_wai(void) {
@@ -1420,6 +1444,54 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                     return 1;
                 }
             }
+        }
+        /* A validated block needs only live architectural state. It creates
+         * no guest frame and must return through the scheduler unwind ABI.
+         * Interrupt handlers and bounded call interpreters stay on their
+         * existing paths. No continuation survives as hidden host state. */
+        const CpuContinuationEntry *continuation =
+            auto_quiescent && !stop_on_rti && !in.e
+                ? find_continuation(pc_before, in.mf, in.xf) : NULL;
+        if (continuation && lle_yield_bounce_enabled() &&
+            !lle_bounce_target_excluded(continuation->owner_pc24) &&
+            !rtl_aot_node_denied(continuation->owner_pc24)) {
+            sync_interp_to_cpu(&in, cpu);
+            if (s_apu_pending_master >= bridge_bounce_flush_thresh())
+                bridge_apu_flush(cpu);
+            const int saved_apu = g_interp_apu_driving;
+            const int saved_base = s_interp_bounce_recomp_base;
+            const int saved_owner = s_interp_bounce_owner_depth;
+            g_interp_apu_driving = 0;
+            s_interp_bounce_recomp_base = g_recomp_stack_top;
+            s_interp_bounce_owner_depth = s_interp_bridge_depth;
+            s_lle_next_unwind_is_deadline = 0;
+            cpu->host_return_valid = 0;
+            RecompReturn result = continuation->body(cpu);
+            g_interp_apu_driving = saved_apu;
+            s_interp_bounce_recomp_base = saved_base;
+            s_interp_bounce_owner_depth = saved_owner;
+            sync_cpu_to_interp(cpu, &in);
+            if (result == RECOMP_RETURN_NORMAL || !s_lle_unwind_active ||
+                s_lle_unwind_owner_depth != s_interp_bridge_depth) {
+                fprintf(stderr, "[interp] invalid continuation result at $%06X\n",
+                        (unsigned)pc_before);
+                bridge_apu_flush(cpu);
+                return 0;
+            }
+            in.k = (uint8)(s_lle_unwind_pc24 >> 16);
+            in.pc = (uint16)s_lle_unwind_pc24;
+            const int deadline = s_lle_unwind_is_deadline;
+            s_lle_unwind_active = 0;
+            s_lle_unwind_owner_depth = 0;
+            s_lle_unwind_is_deadline = 0;
+            if (deadline) {
+                s_lle_resume_pc24 = ((uint32)in.k << 16) | in.pc;
+                sync_interp_to_cpu(&in, cpu);
+                bridge_apu_flush(cpu);
+                return 1;
+            }
+            memset(qring, 0, sizeof qring);
+            continue;
         }
         const uint8_t  op = bridge_bus_read(cpu, pc_before);
         /* A COP reached by interpreted game code vectors to the ROM's invalid-

@@ -2413,6 +2413,10 @@ def _emit_return(op: Return, instruction_commit: Optional[str] = None) -> List[s
            "    cpu->PB = _rpb;",
            "    return interp_bridge_lle_yield_unwind(cpu, _rpc24);",
            "  }"] if instruction_commit else []),
+        *(["  if (_aot_resume) {",
+           "    cpu->PB = _rpb;",
+           "    return interp_bridge_lle_yield_unwind(cpu, _rpc24);",
+           "  }"] if bus_timing.continuation_enabled() else []),
         # task #7 RTS-decision trace (debug builds only). Records the exact
         # host-return-vs-dispatch-vs-miss classification at this RTS/RTL,
         # PC-range-filtered + tripwire-frozen in the recorder. Placed after

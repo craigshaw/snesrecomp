@@ -152,12 +152,18 @@ int main(int argc, char **argv) {
     int ok;
     if (argc >= 4) {
         event_entry = test->pc;
-        if (!strcmp(argv[2], "event-aot")) event_body = test->body;
+        if (!strcmp(argv[2], "event-aot")) {
+            event_body = test->body;
+            interp_bridge_set_continuations(test->continuations, test->continuation_count);
+        }
         else if (strcmp(argv[2], "event-interp")) return 2;
         g_c.S = 0x01FF;
         const uint8 scheduler[] = {0x22, test->pc, test->pc >> 8, test->pc >> 16,
                                    0xA9, 0x5A, 0xCB};
-        load(0x7000, scheduler, sizeof scheduler);
+        const uint8 short_scheduler[] = {0x20, test->pc, test->pc >> 8,
+                                         0xA9, 0x5A, 0xCB};
+        if (test->short_call) load(0x7000, short_scheduler, sizeof short_scheduler);
+        else load(0x7000, scheduler, sizeof scheduler);
         if (!strcmp(argv[3], "nmi")) {
             g_test_snes.inNmi = true;
             g_test_snes.inVblank = true;
@@ -172,6 +178,15 @@ int main(int argc, char **argv) {
             interp_bridge_set_master_deadline(strtoull(argv[3], NULL, 10));
         }
         ok = interp_bridge_run_until_quiescent(&g_c, 0x007000) == 1;
+        if (argc == 5 && !strcmp(argv[4], "repeat")) {
+            for (unsigned i = 0; i < 40 && !interp_bridge_lle_took_wai(); ++i) {
+                const uint32 resume = interp_bridge_lle_resume_pc();
+                interp_bridge_set_master_deadline(g_c.master_cycles + 70);
+                g_test_snes.nmiPending = false;
+                g_test_snes.inIrq = false;
+                ok = ok && interp_bridge_run_until_quiescent(&g_c, resume) == 1;
+            }
+        }
         if (argc == 5 && !strcmp(argv[4], "resume")) {
             const uint32 resume = interp_bridge_lle_resume_pc();
             interp_bridge_set_master_deadline(1000);
@@ -204,6 +219,7 @@ int main(int argc, char **argv) {
            event_entry ? g_snes->apuCatchupCycles : 0.0);
     if (test->instruction_timing) printf(",\"irq\":%d", g_test_snes.inIrq);
     if (test->instruction_timing && event_entry) printf(",\"pb\":%u", g_c.PB);
+    if (test->continuation_count) printf(",\"continuation_entries\":%u", timing_resume_entries);
     printf(",\"writes\":[");
     for (unsigned i = 0; i < write_count; ++i)
         printf("%s{\"address\":%u,\"value\":%u,\"master\":%llu}",
