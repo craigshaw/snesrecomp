@@ -4,7 +4,7 @@ import re
 from dataclasses import fields, is_dataclass
 
 from v2.ir import Value
-from snes65816 import ABS
+from snes65816 import ABS, LONG
 
 ENV = "SNESRECOMP_EMIT_CONTINUATIONS"
 
@@ -45,7 +45,29 @@ def _values(value):
             yield from _values(getattr(value, field.name))
 
 
-def validate(points, block_pairs, depths, graph, entry_s_offset):
+def interpreted_tails(block_pairs, cfg):
+    """Select known exact JML targets that use the owning interpreter handoff.
+
+    Local saves can remain on the guest stack at this transfer. No compiled
+    callee or target exit-state contract is inferred from that stack depth.
+    """
+    from v2.codegen import get_name_for_pc, has_exact_variant
+    result = set()
+    for key, pairs in block_pairs.items():
+        if not pairs or cfg.blocks[key].successors:
+            continue
+        insn = pairs[-1][0]
+        if insn.mnem != 'JMP' or insn.mode != LONG:
+            continue
+        target = insn.operand & 0xFFFFFF
+        if (get_name_for_pc(target) is not None
+                and not has_exact_variant(target, insn.m_flag, insn.x_flag)):
+            result.add((insn.addr, insn.m_flag, insn.x_flag))
+    return result
+
+
+def validate(points, block_pairs, depths, graph, entry_s_offset,
+             interpreted_tail_keys=()):
     """Require a proven local stack depth and no predecessor host temporaries."""
     if entry_s_offset or graph.const_z_folds:
         raise ValueError("continuations require plain stack entries and no folded branches")
@@ -57,9 +79,11 @@ def validate(points, block_pairs, depths, graph, entry_s_offset):
     for pairs in block_pairs.values():
         defined = set()
         for insn, ops in pairs:
-            # External tail obligations need a separate continuation contract.
-            if insn.mnem == "JMP" and insn.mode != ABS:
-                raise ValueError("continuations do not yet support JMP tails")
+            # Only a known interpreted JML uses the existing owner handoff.
+            # Compiled and unresolved external tails still need separate proof.
+            if (insn.mnem == "JMP" and insn.mode != ABS
+                    and (insn.addr, insn.m_flag, insn.x_flag) not in interpreted_tail_keys):
+                raise ValueError("continuations require known interpreted JMP tails")
             for op in ops:
                 for field in fields(op):
                     value = getattr(op, field.name)

@@ -75,7 +75,7 @@ def scope_function(emitter):
     return scoped
 
 
-def validate_instruction_leaf(block_pairs, cfg):
+def validate_instruction_leaf(block_pairs, cfg, *, interpreted_tail_keys=()):
     """Accept native bodies with tested control flow, arithmetic and status."""
     from snes65816 import (IMP, ACC, IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X,
                           DP, DP_X, DP_Y, REL, REL16, INDIR_LY)
@@ -166,9 +166,12 @@ def validate_instruction_leaf(block_pairs, cfg):
                 depth -= 2
             if depth < 0:
                 raise ValueError("instruction timing cannot pull the caller's frame")
+            interpreted_tail = (insn.addr, insn.m_flag, insn.x_flag) in interpreted_tail_keys
             if depth and (insn.mnem in ("RTS", "RTL", "JSR", "JSL")
-                          or direct_long_tail(insn, ops)):
+                          or (direct_long_tail(insn, ops) and not interpreted_tail)):
                 raise ValueError("instruction timing requires balanced stack at transfers")
+            if interpreted_tail and depth >= 0x10000:
+                raise ValueError("interpreted tails require a bounded local stack depth")
         for successor in cfg.blocks[key].successors:
             if successor in depths:
                 if depths[successor] != depth:

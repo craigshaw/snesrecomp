@@ -852,10 +852,14 @@ def emit_function(rom: bytes, bank: int, start: int,
     if resume_points and (not instruction_timing or event_precision_function or has_lle_memory_poll):
         raise ValueError("continuations require instruction timing without LLE guards")
     if instruction_timing:
-        depths = bus_timing.validate_instruction_leaf(block_per_insn_ir, cfg)
+        interpreted_tail_keys = (continuations.interpreted_tails(block_per_insn_ir, cfg)
+                                 if resume_points else ())
+        depths = bus_timing.validate_instruction_leaf(
+            block_per_insn_ir, cfg, interpreted_tail_keys=interpreted_tail_keys)
         if resume_points:
             resume_depths = continuations.validate(
-                resume_points, block_per_insn_ir, depths, graph, entry_s_offset)
+                resume_points, block_per_insn_ir, depths, graph, entry_s_offset,
+                interpreted_tail_keys)
 
     # ── Non-local-return idiom detection ────────────────────────────────
     # A basic block is an NLR-block if its IR has the shape
