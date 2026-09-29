@@ -120,7 +120,7 @@ def validate_instruction_leaf(block_pairs, cfg):
                 or (insn.mnem in ("LDA", "LDX", "LDY", "STA", "STX", "STY", "STZ",
                                   "CMP", "ADC", "AND", "EOR", "BIT")
                     and insn.mode in data_modes)
-                or (insn.mnem == "ORA" and insn.mode == IMM)
+                or (insn.mnem == "ORA" and insn.mode in (IMM, DP))
                 or (insn.mnem == "ORA" and insn.mode == ABS_Y and insn.m_flag == 0)
                 or (insn.mnem in ("LDA", "SBC") and insn.mode == INDIR_LY
                     and insn.m_flag == 1 and insn.x_flag == 0)
