@@ -100,6 +100,19 @@ static void bridge_apu_flush(CpuState *cpu) {
 }
 int g_aot_instruction_read_active;
 
+int interp_bridge_aot_apu_begin(CpuState *cpu) {
+    bridge_apu_flush(cpu);
+    int saved = g_interp_apu_driving;
+#ifdef SNES_COSIM
+    if (!cosim_apu_shared_clock())
+#endif
+        g_interp_apu_driving = 1;
+    return saved;
+}
+void interp_bridge_aot_apu_end(int saved_driving) {
+    g_interp_apu_driving = saved_driving;
+}
+
 void interp_bridge_commit_instruction(CpuState *cpu, unsigned cycles,
                                       uint64_t master) {
     cpu->cycles += cycles;

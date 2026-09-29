@@ -849,7 +849,7 @@ def emit_function(rom: bytes, bank: int, start: int,
     instruction_timing = (
         (bank << 16 | start, entry_m, entry_x) in bus_timing.instruction_targets())
     resume_points = continuations.selections().get((bank << 16 | start, entry_m, entry_x), ())
-    if resume_points and (not instruction_timing or event_precision_function or has_lle_memory_poll):
+    if resume_points and (not instruction_timing or event_precision_function):
         raise ValueError("continuations require instruction timing without LLE guards")
     if instruction_timing:
         interpreted_tail_keys = (continuations.interpreted_tails(block_per_insn_ir, cfg)
@@ -2153,7 +2153,9 @@ def emit_function(rom: bytes, bank: int, start: int,
            else f'0x{fn_entry_pc:06X}u);')
     )
     src.append('  }')
-    if has_lle_memory_poll:
+    # Instruction-timed polls commit and check events after every opcode.
+    # Aggregate-timed bodies still need the scheduler's interpreted path.
+    if has_lle_memory_poll and not instruction_timing:
         src.append('  if (interp_bridge_in_lle_scheduler()) {')
         src.append('    RecompStackPop();')
         src.append(
@@ -2276,6 +2278,18 @@ def emit_function(rom: bytes, bank: int, start: int,
             f'      return interp_bridge_lle_yield_unwind('
             f'cpu, 0x{block_pc24:06X}u);')
         src.append('    }')
+        if instruction_timing and any(
+                insn.mnem == "PLP" for insn, _ in block_per_insn_ir[key]):
+            # Retain the terminal status-restore block in the owning
+            # interpreter. Its writes and status restore establish progress
+            # history for a following cooperative wait. Timed AOT currently
+            # models clocks and events, not that interpreter history.
+            src.append('    if (interp_bridge_in_lle_scheduler()) {')
+            src.append('      RecompStackPop();')
+            src.append(
+                f'      return interp_bridge_lle_yield_unwind('
+                f'cpu, 0x{block_pc24:06X}u);  /* interpreted status epilogue */')
+            src.append('    }')
         # Cartridge coprocessors observe CPU bus accesses no earlier than this
         # architectural block boundary. The aggregate static charge below
         # advances the frame clock to the end of the block before its emitted

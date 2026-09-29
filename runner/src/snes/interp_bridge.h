@@ -41,6 +41,11 @@ static inline bool interp_bridge_use_absolute_apu_timeline(
   return frame_timeline_active && is_sa1;
 }
 
+/* Instruction-timed AOT uses the same pre-port flush and pacing scope as
+ * interpreted bus callbacks. Save/restore makes nested access safe. */
+int interp_bridge_aot_apu_begin(CpuState *cpu);
+void interp_bridge_aot_apu_end(int saved_driving);
+
 /* Optional game policy invoked immediately before one interpreted opcode.
  * The bridge compares the live PC first, so ordinary interpreted instructions
  * pay only the address check. At a match it synchronizes registers into

@@ -56,11 +56,12 @@ def cases():
 
 class StatusInstructionTiming(unittest.TestCase):
     def test_index_width_changes_fail_closed(self):
-        with patch.dict(os.environ, {"SNESRECOMP_EMIT_INSTRUCTION_TIMING": "008000:1:0"}):
-            for opcode in (0xC2, 0xE2):
+        for opcode, entry_x in ((0xC2, 1), (0xE2, 0)):
+            with patch.dict(os.environ, {
+                    "SNESRECOMP_EMIT_INSTRUCTION_TIMING": f"008000:1:{entry_x}"}):
                 with self.assertRaises(ValueError):
                     timing.emit_function(bytes([opcode, 0x10, 0x6B]) + bytes(32765),
-                                         bank=0, start=0x8000, entry_m=1, entry_x=0)
+                                         bank=0, start=0x8000, entry_m=1, entry_x=entry_x)
 
     def test_status_alu_and_scheduler(self):
         with tempfile.TemporaryDirectory(prefix="snes-status-timing-") as temp, patch.dict(

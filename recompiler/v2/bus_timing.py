@@ -98,7 +98,14 @@ def validate_instruction_leaf(block_pairs, cfg, *, interpreted_tail_keys=()):
         if (not successors and pairs[-1][0].mnem not in ("RTS", "RTL")
                 and not direct_long_tail(*pairs[-1])):
             raise ValueError("instruction timing requires a final RTS, RTL or direct JML")
-        for insn, ops in pairs:
+        for index, (insn, ops) in enumerate(pairs):
+            # A terminal PLP can restore runtime widths without decoding any
+            # following width-dependent instruction. Other PLP paths remain
+            # unsupported until their restored state is proven separately.
+            following = (pairs[index + 1][0] if index + 1 < len(pairs) else
+                         block_pairs[successors[0]][0][0] if len(successors) == 1 else None)
+            terminal_plp = (insn.mnem == "PLP" and following is not None
+                            and following.mnem in ("RTS", "RTL"))
             direct_call = (insn.mnem in ("JSR", "JSL") and insn.mode in (ABS, LONG)
                            and not getattr(insn, 'dispatch_entries', None)
                            and not getattr(insn, 'dispatch_runtime', False)
@@ -110,13 +117,15 @@ def validate_instruction_leaf(block_pairs, cfg, *, interpreted_tail_keys=()):
                 (insn.mnem in ("RTS", "RTL", "NOP", "CLC", "SEC", "DEY", "INY", "INX", "DEX", "TYA", "XBA")
                  and insn.mode == IMP)
                 or (insn.mnem in ("PHA", "PLA") and insn.mode == IMP)
+                or ((insn.mnem == "PHP" or terminal_plp) and insn.mode == IMP)
                 or (insn.mnem in ("PHX", "PLX", "PHY", "PLY") and insn.mode == IMP
                     and insn.x_flag == 0)
                 or (insn.mnem in ("TXA", "TAX", "TAY") and insn.mode == IMP
                     and insn.m_flag == 0 and insn.x_flag == 0)
-                # Index-width changes need separate narrowing/resume support.
+                # Permit idempotent X updates, but no index-width change.
                 or (insn.mnem in ("REP", "SEP") and insn.mode == IMM
-                    and not (insn.operand & 0x10))
+                    and (not (insn.operand & 0x10)
+                         or insn.x_flag == int(insn.mnem == "SEP")))
                 or (insn.mnem in ("LDA", "LDX", "LDY", "STA", "STX", "STY", "STZ",
                                   "CMP", "ADC", "AND", "EOR", "BIT")
                     and insn.mode in data_modes)
@@ -124,6 +133,8 @@ def validate_instruction_leaf(block_pairs, cfg, *, interpreted_tail_keys=()):
                 or (insn.mnem == "ORA" and insn.mode == ABS_Y and insn.m_flag == 0)
                 or (insn.mnem in ("LDA", "SBC") and insn.mode == INDIR_LY
                     and insn.m_flag == 1 and insn.x_flag == 0)
+                or (insn.mnem == "LDA" and insn.mode == INDIR_LY
+                    and insn.m_flag == 0 and insn.x_flag == 0)
                 or (insn.mnem == "CPX" and insn.mode in (IMM, DP, ABS))
                 or (insn.mnem == "SBC" and insn.mode in (IMM, ABS))
                 or (insn.mnem == "SBC" and insn.mode == DP)
@@ -135,6 +146,7 @@ def validate_instruction_leaf(block_pairs, cfg, *, interpreted_tail_keys=()):
                 or (insn.mnem in ("ASL", "INC") and insn.mode == ACC)
                 or (insn.mnem == "ROR" and insn.mode == ACC and insn.m_flag == 0)
                 or (insn.mnem == "LSR" and insn.mode == ACC and insn.m_flag == 0)
+                or (insn.mnem == "ROL" and insn.mode == ACC and insn.m_flag == 1)
                 or (insn.mnem in branches and insn.mode in (REL, REL16))
                 or (insn.mnem == "JMP" and insn.mode == ABS
                     and len(successors) == 1 and successors[0] in block_pairs
@@ -164,6 +176,10 @@ def validate_instruction_leaf(block_pairs, cfg, *, interpreted_tail_keys=()):
                 depth += 2
             elif insn.mnem in ("PLX", "PLY"):
                 depth -= 2
+            elif insn.mnem == "PHP":
+                depth += 1
+            elif insn.mnem == "PLP":
+                depth -= 1
             if depth < 0:
                 raise ValueError("instruction timing cannot pull the caller's frame")
             interpreted_tail = (insn.addr, insn.m_flag, insn.x_flag) in interpreted_tail_keys

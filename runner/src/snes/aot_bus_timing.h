@@ -70,24 +70,32 @@ static inline void cpu_aot_insn_bus_extra(CpuAotInstructionTiming *timing,
 static inline uint8 cpu_aot_insn_read8(CpuState *cpu, CpuAotInstructionTiming *timing,
                                       uint8 bank, uint16 addr) {
     cpu_aot_insn_bus_extra(timing, bank, addr, 1);
+    int apu = !(bank & 0x40) && addr >= 0x2140 && addr <= 0x217F;
+    int apu_saved = apu ? interp_bridge_aot_apu_begin(cpu) : 0;
     int saved = g_aot_instruction_read_active;
     g_aot_instruction_read_active = 1;
     uint8 value = cpu_read8(cpu, bank, addr);
     g_aot_instruction_read_active = saved;
+    if (apu) interp_bridge_aot_apu_end(apu_saved);
     return value;
 }
 static inline uint16 cpu_aot_insn_read16(CpuState *cpu, CpuAotInstructionTiming *timing,
                                         uint8 bank, uint16 addr) {
     cpu_aot_insn_bus_extra(timing, bank, addr, 2);
+    int apu = !(bank & 0x40) && addr >= 0x2140 && addr <= 0x217F;
+    int apu_saved = apu ? interp_bridge_aot_apu_begin(cpu) : 0;
     int saved = g_aot_instruction_read_active;
     g_aot_instruction_read_active = 1;
     uint16 value = cpu_read16(cpu, bank, addr);
     g_aot_instruction_read_active = saved;
+    if (apu) interp_bridge_aot_apu_end(apu_saved);
     return value;
 }
 static inline uint16 cpu_aot_insn_read16_linear(CpuState *cpu,
                                                CpuAotInstructionTiming *timing,
                                                uint8 bank, uint16 addr) {
+    /* Contiguous words retain the interpreter's atomic MMIO callback. */
+    if (addr != 0xFFFF) return cpu_aot_insn_read16(cpu, timing, bank, addr);
     uint32 next = ((((uint32)bank << 16) | addr) + 1u) & 0xFFFFFFu;
     uint16 low = cpu_aot_insn_read8(cpu, timing, bank, addr);
     return low | ((uint16)cpu_aot_insn_read8(cpu, timing, (uint8)(next >> 16),
@@ -96,12 +104,18 @@ static inline uint16 cpu_aot_insn_read16_linear(CpuState *cpu,
 static inline void cpu_aot_insn_write8(CpuState *cpu, CpuAotInstructionTiming *timing,
                                       uint8 bank, uint16 addr, uint8 value) {
     cpu_aot_insn_bus_extra(timing, bank, addr, 1);
+    int apu = !(bank & 0x40) && addr >= 0x2140 && addr <= 0x217F;
+    int apu_saved = apu ? interp_bridge_aot_apu_begin(cpu) : 0;
     cpu_write8(cpu, bank, addr, value);
+    if (apu) interp_bridge_aot_apu_end(apu_saved);
 }
 static inline void cpu_aot_insn_write16(CpuState *cpu, CpuAotInstructionTiming *timing,
                                        uint8 bank, uint16 addr, uint16 value) {
     cpu_aot_insn_bus_extra(timing, bank, addr, 2);
+    int apu = !(bank & 0x40) && addr >= 0x2140 && addr <= 0x217F;
+    int apu_saved = apu ? interp_bridge_aot_apu_begin(cpu) : 0;
     cpu_write16(cpu, bank, addr, value);
+    if (apu) interp_bridge_aot_apu_end(apu_saved);
 }
 static inline void cpu_aot_insn_write16_reverse(CpuState *cpu,
                                                CpuAotInstructionTiming *timing,

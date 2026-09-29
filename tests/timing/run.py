@@ -136,7 +136,8 @@ def build(out: Path, cc: str, cases=None) -> Path:
                      f"{case.get('x', 0)}, {case.get('y', 0)}, {case.get('d', 0)}, "
                      f"{case.get('memsel', 0)}, init_{i}, {len(memory)}, {name}, "
                      f"{int(bool(case.get('instruction_timing')))}, {case.get('status', 4)}, "
-                     f"resumes_{i}, {len(case.get('continuations', []))}, {int(bool(case.get('short_call')))}" + "}")
+                     f"resumes_{i}, {len(case.get('continuations', []))}, {int(bool(case.get('short_call')))}, "
+                     f"{case.get('poll_address', 0)}, {case.get('poll_ready', 0)}" + "}")
     header = """typedef struct TimingInit { uint32 address; uint8 value; } TimingInit;
 typedef struct TimingCase {
     const uint8_t *code; int size; uint32 pc;
@@ -148,6 +149,8 @@ typedef struct TimingCase {
     const CpuContinuationEntry *continuations;
     unsigned continuation_count;
     int short_call;
+    uint32 poll_address;
+    uint64_t poll_ready;
 } TimingCase;
 static unsigned timing_resume_entries;
 """

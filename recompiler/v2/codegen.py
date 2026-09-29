@@ -558,6 +558,12 @@ def _segref_addr_expr(seg: SegRef) -> tuple:
 def _emit_read(op: Read) -> List[str]:
     bank, addr = _segref_addr_expr(op.seg)
     prefix, bank, addr = _bus_address_once(op.seg, bank, addr)
+    if (bus_timing.instruction_enabled() and op.width == 2
+            and op.seg.kind == SegKind.DP_INDIRECT_LONG and op.seg.index == Reg.Y):
+        # Only the data word carries across the 24-bit bank boundary. Keep
+        # the direct-page pointer word above wrapped within bank zero.
+        return prefix + [f"uint16 {_v(op.out)} = "
+                         f"cpu_aot_insn_read16_linear(cpu, &_aot_timing, {bank}, {addr});"]
     return prefix + [f"{widths.ctype(op.width)} {_v(op.out)} = "
             f"{widths.read_fn(op.width)}(cpu, {bank}, {addr});"]
 

@@ -4,6 +4,8 @@
 #define main bridge_contract_main
 #define cpu_write8 bridge_fixture_write8
 #define cpu_write16 bridge_fixture_write16
+#define cpu_read8 bridge_fixture_read8
+#define cpu_read16 bridge_fixture_read16
 #define cpu_dispatch_has_entry bridge_fixture_has_entry
 #define cpu_dispatch_pc_paired bridge_fixture_paired
 #define snes_refresh_charge bridge_fixture_refresh
@@ -13,6 +15,8 @@
 #undef main
 #undef cpu_write8
 #undef cpu_write16
+#undef cpu_read8
+#undef cpu_read16
 #undef cpu_dispatch_has_entry
 #undef cpu_dispatch_pc_paired
 #undef snes_refresh_charge
@@ -48,6 +52,20 @@ static uint32 event_entry;
 static RecompReturn (*event_body)(CpuState *);
 static uint64_t refresh_at, beam_nmi_at, beam_irq_at, last_sync;
 static unsigned refresh_count, sync_count;
+static uint32 poll_address;
+static uint64_t poll_ready;
+
+uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 address) {
+    /* A bounded device wait. Both tiers must observe the same instruction
+     * start clock, including after a scheduler yield or continuation. */
+    if (poll_ready && (((uint32)bank << 16) | address) == poll_address)
+        return cpu->master_cycles >= poll_ready;
+    return bridge_fixture_read8(cpu, bank, address);
+}
+uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 address) {
+    return cpu_read8(cpu, bank, address) |
+           ((uint16)cpu_read8(cpu, bank, (uint16)(address + 1)) << 8);
+}
 
 void snes_refresh_charge(void) {
     refresh_count++;
@@ -111,6 +129,8 @@ int main(int argc, char **argv) {
     unsigned index = (unsigned)strtoul(argv[1], NULL, 10);
     if (index >= sizeof(cases) / sizeof(cases[0])) return 2;
     const TimingCase *test = &cases[index];
+    poll_address = test->poll_address;
+    poll_ready = test->poll_ready;
     RAM = calloc(1, MEMSZ);
     if (!RAM) return 2;
     init_cpu();

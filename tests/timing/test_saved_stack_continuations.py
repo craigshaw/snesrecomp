@@ -74,7 +74,7 @@ class SavedStackContinuations(unittest.TestCase):
     def test_fail_closed(self):
         for code in ([0xC2,0x20,0x48,0xE2,0x20,0x68,0x6B],
                      [0x5A,0x6B], [0x7A,0x6B],
-                     [0xC2,0x20,0xB7,0x40,0x6B],
+                     [0xC2,0x20,0xF7,0x40,0x6B],  # word SBC [dp],Y stays unsupported
                      [0xC2,0x20,0x6E,0x40,0,0x6B]):
             with patch.dict(os.environ, {'SNESRECOMP_EMIT_INSTRUCTION_TIMING':'008000:1:0'}):
                 with self.subTest(code=code), self.assertRaises(ValueError):
