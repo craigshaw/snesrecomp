@@ -75,7 +75,8 @@ def scope_function(emitter):
     return scoped
 
 
-def validate_instruction_leaf(block_pairs, cfg, *, interpreted_tail_keys=()):
+def validate_instruction_leaf(block_pairs, cfg, *, interpreted_tail_keys=(),
+                              instruction_depths=None):
     """Accept native bodies with tested control flow, arithmetic and status."""
     from snes65816 import (IMP, ACC, IMM, ABS, ABS_X, ABS_Y, LONG, LONG_X,
                           DP, DP_X, DP_Y, REL, REL16, INDIR_LY)
@@ -168,6 +169,11 @@ def validate_instruction_leaf(block_pairs, cfg, *, interpreted_tail_keys=()):
         key = pending.pop()
         depth = depths[key]
         for insn, ops in block_pairs[key]:
+            if instruction_depths is not None:
+                point = (insn.addr, insn.m_flag, insn.x_flag)
+                if point in instruction_depths and instruction_depths[point] != depth:
+                    raise ValueError("instruction timing requires equal depth at exact instructions")
+                instruction_depths[point] = depth
             if insn.mnem == "PHA":
                 depth += 1 if insn.m_flag else 2
             elif insn.mnem == "PLA":

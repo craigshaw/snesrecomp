@@ -43,6 +43,22 @@ def cases():
                 result.append(dict(common, name=f'balanced-{fast}-{cross}-{short}',
                                    code=code, continuations=[(pc+3,1,0)],
                                    memory={target+i:b for i,b in enumerate(helper)}))
+    # Unnamed same-bank instruction, inside the entry block rather than at a
+    # function root. The JML must return to the interpreter before the helper
+    # call, then resume natively after its real guest return frame is consumed.
+    for fast in (0, 1):
+        pc = 0x808000 if fast else 0x8000
+        helper = (pc & 0xFF0000) | 0x8200
+        for m in (0, 1):
+            for short in (False, True):
+                code = [0xA2,3,0,0x22,0,0x82,pc>>16,0xCA,0xF0,4,
+                        0x5C,3,0x80,pc>>16,0x60 if short else 0x6B]
+                result.append(dict(name=f'internal-{fast}-{m}-{short}', pc=pc,
+                                   code=code, m=m, memsel=fast, status=0,
+                                   instruction_timing=True, short_call=short,
+                                   continuations=[(pc+7,m,0)],
+                                   interpreted_callees=[helper],
+                                   memory={helper:0x1A,helper+1:0x6B}))
     return result
 
 
@@ -71,6 +87,37 @@ class InterpretedTailContinuations(unittest.TestCase):
                 finally:
                     codegen.set_name_resolver({})
                     codegen.set_valid_variants({})
+
+    def test_internal_backedge_proof(self):
+        from types import SimpleNamespace as N
+        from v2.continuations import internal_interpreted_backedges
+        from snes65816 import LONG
+        root = N(pc=0x8000, m=1, x=0)
+        insn = N(addr=0x8010, m_flag=1, x_flag=0, mnem='JMP', mode=LONG,
+                 operand=0x8003)
+        cfg = N(entry=root, blocks={0:N(successors=[])})
+        pairs = {0:[(insn,[])]}
+        site, target = (0x8010,1,0), (0x8003,1,0)
+        try:
+            codegen.set_name_resolver({})
+            codegen.set_valid_variants({}, authoritative=True)
+            self.assertEqual(internal_interpreted_backedges(pairs,cfg,{site:0,target:0}), {site})
+            for depths in ({site:0}, {site:0,(0x8003,0,0):0},
+                           {site:0,target:2}, {site:2,target:0}, {site:2,target:2}):
+                self.assertFalse(internal_interpreted_backedges(pairs,cfg,depths))
+            for address in (0x8000,0x8012,0x808003):
+                insn.operand=address
+                self.assertFalse(internal_interpreted_backedges(
+                    pairs,cfg,{site:0,(address,1,0):0}))
+            insn.operand=target[0]
+            codegen.set_valid_variants({target[0]:{(1,0)}}, authoritative=True)
+            self.assertFalse(internal_interpreted_backedges(pairs,cfg,{site:0,target:0}))
+            # An alternate width body does not turn this exact target native.
+            codegen.set_valid_variants({target[0]:{(0,0)}}, authoritative=True)
+            self.assertEqual(internal_interpreted_backedges(pairs,cfg,{site:0,target:0}), {site})
+        finally:
+            codegen.set_name_resolver({})
+            codegen.set_valid_variants({})
 
     def test_complete_and_event_parity(self):
         clean = {k:v for k,v in os.environ.items() if not k.startswith('SNESRECOMP_')}

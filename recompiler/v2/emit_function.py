@@ -854,9 +854,13 @@ def emit_function(rom: bytes, bank: int, start: int,
     if instruction_timing:
         interpreted_tail_keys = (continuations.interpreted_tails(block_per_insn_ir, cfg)
                                  if resume_points else ())
+        instruction_depths = {} if resume_points else None
         depths = bus_timing.validate_instruction_leaf(
-            block_per_insn_ir, cfg, interpreted_tail_keys=interpreted_tail_keys)
+            block_per_insn_ir, cfg, interpreted_tail_keys=interpreted_tail_keys,
+            instruction_depths=instruction_depths)
         if resume_points:
+            interpreted_tail_keys |= continuations.internal_interpreted_backedges(
+                block_per_insn_ir, cfg, instruction_depths)
             resume_depths = continuations.validate(
                 resume_points, block_per_insn_ir, depths, graph, entry_s_offset,
                 interpreted_tail_keys)
@@ -1680,6 +1684,17 @@ def emit_function(rom: bytes, bank: int, start: int,
                                     register_call_demand,
                                 )
                                 tgt_name = get_name_for_pc(target_pc24)
+                                if (resume_points and tgt_name is None
+                                        and (insn.addr, jml_m, jml_x)
+                                        in interpreted_tail_keys):
+                                    # Proven internal back-edge. Keep its real
+                                    # interpreter owner and progress history;
+                                    # do not manufacture a function entry.
+                                    lines.append(_lle_tail_stmt(
+                                        target_pc24, insn.addr,
+                                        "/* internal JML -> authoritative LLE */"))
+                                    block_terminated = True
+                                    break
                                 if tgt_name is not None:
                                     register_call_demand(target_pc24,
                                                          jml_m, jml_x)

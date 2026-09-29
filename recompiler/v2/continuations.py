@@ -66,6 +66,34 @@ def interpreted_tails(block_pairs, cfg):
     return result
 
 
+def internal_interpreted_backedges(block_pairs, cfg, instruction_depths):
+    """Prove unnamed internal JML landings without inventing function roots.
+
+    The ordinary stack check runs first, so these transfers cannot borrow the
+    saved-stack exception for named interpreted tails. Require zero local depth
+    at both exact instruction boundaries. Leave the destination interpreted so
+    its call/return and progress history stay with the active scheduler owner.
+    """
+    from v2.codegen import get_name_for_pc, has_exact_variant
+    result = set()
+    entry = (cfg.entry.pc, cfg.entry.m, cfg.entry.x)
+    for key, pairs in block_pairs.items():
+        if not pairs or cfg.blocks[key].successors:
+            continue
+        insn = pairs[-1][0]
+        if insn.mnem != 'JMP' or insn.mode != LONG:
+            continue
+        target = (insn.operand & 0xFFFFFF, insn.m_flag, insn.x_flag)
+        site = (insn.addr, insn.m_flag, insn.x_flag)
+        if (target != entry and target[0] >> 16 == insn.addr >> 16
+                and target[0] < insn.addr and get_name_for_pc(target[0]) is None
+                and not has_exact_variant(*target)
+                and instruction_depths.get(site) == 0
+                and instruction_depths.get(target) == 0):
+            result.add(site)
+    return result
+
+
 def validate(points, block_pairs, depths, graph, entry_s_offset,
              interpreted_tail_keys=()):
     """Require a proven local stack depth and no predecessor host temporaries."""
